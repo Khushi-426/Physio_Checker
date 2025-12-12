@@ -2,89 +2,112 @@
 
 const express = require('express');
 const router = express.Router();
-const User = require('../models/User'); 
-const jwt = require('jsonwebtoken'); 
-// bcrypt is needed for the login route's comparePassword method (though the model uses it too)
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-// @route   POST /api/auth/register
-// @desc    Register a new Therapist user
-// @access  Public
-router.post('/register', async (req, res) => {
-    const { email, password } = req.body;
+// helper to create JWT
+const createToken = (user) => {
+  const payload = {
+    user: {
+      id: user.id,
+      role: user.role
+    }
+  };
 
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Please enter all fields.' });
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '5h' });
+};
+
+// ---------------------- THERAPIST REGISTER ----------------------
+// POST /api/auth/therapist/register
+router.post('/therapist/register', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Please enter all fields.' });
+  }
+
+  try {
+    let existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: 'User already exists.' });
     }
 
-    try {
-        let user = await User.findOne({ email });
-        if (user) {
-            return res.status(400).json({ message: 'User already exists.' });
-        }
+    const user = new User({
+      email,
+      password,
+      role: 'THERAPIST'
+    });
 
-        // The password hashing is automatically done by the userSchema.pre('save') hook
-        user = new User({
-            email,
-            password,
-            role: 'THERAPIST' // Role is explicitly set for this registration endpoint
-        });
+    await user.save();
 
-        await user.save();
-
-        res.status(201).json({ message: 'Therapist registered successfully.' });
-
-    } catch (err) {
-        // Log the full error object for better debugging
-        console.error("Registration Error:", err); 
-        res.status(500).send('Server Error during registration.');
-    }
+    return res.status(201).json({ message: 'Therapist registered successfully.' });
+  } catch (err) {
+    console.error('Therapist Registration Error:', err);
+    return res.status(500).json({ message: 'Server error during therapist registration.' });
+  }
 });
 
-// @route   POST /api/auth/login
-// @desc    Authenticate Therapist & get token
-// @access  Public
-router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+// ---------------------- PATIENT REGISTER ------------------------
+// POST /api/auth/patient/register
+router.post('/patient/register', async (req, res) => {
+  const { email, password } = req.body;
 
-    try {
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(400).json({ message: 'Invalid Credentials.' });
-        }
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Please enter all fields.' });
+  }
 
-        // Check the user's role
-        if (user.role !== 'THERAPIST') {
-             return res.status(403).json({ message: 'Access Denied: Not a Therapist account.' });
-        }
-
-        // Compare the provided password with the stored hash
-        const isMatch = await user.comparePassword(password);
-        if (!isMatch) {
-            return res.status(400).json({ message: 'Invalid Credentials.' });
-        }
-
-        // Generate the JWT
-        const payload = {
-            user: {
-                id: user.id,
-                role: user.role
-            }
-        };
-
-        jwt.sign(
-            payload,
-            process.env.JWT_SECRET, // JWT Secret from .env
-            { expiresIn: '5h' }, 
-            (err, token) => {
-                if (err) throw err;
-                res.json({ token }); 
-            }
-        );
-
-    } catch (err) {
-        console.error("Login Error:", err);
-        res.status(500).send('Server Error during login.');
+  try {
+    let existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: 'User already exists.' });
     }
+
+    const user = new User({
+      email,
+      password,
+      role: 'PATIENT'
+    });
+
+    await user.save();
+
+    return res.status(201).json({ message: 'Patient registered successfully.' });
+  } catch (err) {
+    console.error('Patient Registration Error:', err);
+    return res.status(500).json({ message: 'Server error during patient registration.' });
+  }
+});
+
+// ---------------------- THERAPIST LOGIN -------------------------
+// POST /api/auth/therapist/login
+router.post('/therapist/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Please enter all fields.' });
+  }
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid credentials.' });
+    }
+
+    if (user.role !== 'THERAPIST') {
+      return res.status(403).json({ message: 'Access denied: not a therapist account.' });
+    }
+
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials.' });
+    }
+
+    const token = createToken(user);
+    return res.json({ token });
+  } catch (err) {
+    console.error('Therapist Login Error:', err);
+    return res.status(500).json({ message: 'Server error during therapist login.' });
+  }
 });
 
 module.exports = router;
