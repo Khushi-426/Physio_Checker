@@ -1,0 +1,19 @@
+:root {
+  --bg-color: #F9F7F2;        /* Creamy Off-White */
+  --card-bg: #FFFFFF;         /* Pure White */
+  --text-primary: #1A3C34;    /* Deep Forest Green */
+  --text-secondary: #4A635D;  /* Sage Grey */
+  --primary-color: #76B041;   /* Rich Leaf Green */
+  --primary-hover: #5E8D34;   
+  --error-color: #D32F2F;     
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-color);
+  font-family: Inter, system-ui, sans-serif;
+  color: var(--text-primary);
+}
