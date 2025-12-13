@@ -3,6 +3,11 @@
 const express = require('express');
 const connectDB = require('./config/db'); 
 const authRoutes = require('./routes/auth'); 
+const protocolRoutes = require('./routes/protocols');
+const therapistRoutes = require('./routes/therapist');
+const sessionRoutes = require('./routes/sessions');
+const notificationRoutes = require('./routes/notifications');
+
 // We are skipping therapistRoutes and patientRoutes for now to focus on the fix.
 
 // 1. Load environment variables (CRUCIAL: Must be the very first line after requires)
@@ -19,6 +24,10 @@ app.use(express.json()); // Allows the server to accept JSON data in the request
 
 // 4. Define Main Routes
 app.use('/api/auth', authRoutes); 
+app.use('/api/protocols', protocolRoutes);
+app.use('/api/therapist', therapistRoutes);
+app.use('/api/sessions', sessionRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Basic Test Route (Optional)
 app.get('/', (req, res) => {
