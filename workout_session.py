@@ -5,11 +5,23 @@ Main workout session manager - OPTIMIZED FOR USER-CENTERED DESIGN & ACCURACY
 import cv2
 import mediapipe as mp
 import numpy as np
+import sys
 import time
 from typing import Tuple, Optional, Dict
 from collections import deque
 
-from mediapipe.python.solutions.holistic import PoseLandmark as mp_pose_lm 
+# --- DEBUG / SAFETY CHECK ---
+# This block ensures you aren't shadowing the library with a local file
+if not hasattr(mp, 'solutions'):
+    print(f"\n❌ FATAL ERROR: MediaPipe is not loaded correctly.")
+    print(f"   Python loaded it from: {mp.__file__}")
+    print("   Please DELETE or RENAME any file named 'mediapipe.py' in your project folder.\n")
+    raise ImportError("Module 'mediapipe' has no attribute 'solutions' (likely shadowed by local file).")
+
+# --- CORRECTED IMPORT ---
+mp_pose_lm = mp.solutions.holistic.PoseLandmark
+# ------------------------
+
 from models import ArmMetrics, CalibrationData, SessionHistory, GhostPose, Landmark2D 
 from ai_engine import AIEngine
 
