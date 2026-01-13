@@ -1,6 +1,7 @@
 # workout_session.py
 """
 Main workout session manager - OPTIMIZED FOR USER-CENTERED DESIGN & ACCURACY
+With Exercise Verification (Visual + Audio Warning)
 """
 import cv2
 import mediapipe as mp
@@ -12,6 +13,7 @@ from collections import deque
 from mediapipe.python.solutions.holistic import PoseLandmark as mp_pose_lm 
 from models import ArmMetrics, CalibrationData, SessionHistory, GhostPose, Landmark2D 
 from ai_engine import AIEngine
+from exercise_verifier import ExerciseVerifier
 
 # Initialize MediaPipe Drawing Utils
 mp_drawing = mp.solutions.drawing_utils
@@ -55,6 +57,7 @@ class WorkoutSession:
         # Initialize internal components
         angle_calc = AngleCalculator(SMOOTHING_WINDOW)
         self.pose_processor = PoseProcessor(angle_calc, self.exercise_config)
+        self.verifier = ExerciseVerifier() # Initialize the Verifier
         
         self.calibration_data = CalibrationData()
         self.calibration_manager = CalibrationManager(
@@ -80,6 +83,11 @@ class WorkoutSession:
         self.ai_latched_state = {'RIGHT': False, 'LEFT': False}
         self.listening_mode = False 
         self.last_feedback_text = {'RIGHT': "", 'LEFT': ""}
+        
+        # Wrong Exercise Detection State
+        self.wrong_exercise_counter = 0
+        self.wrong_exercise_detected = False
+        self.wrong_exercise_reason = ""
 
         # Ghost Skeleton Connections
         self.ghost_connections = [
@@ -122,6 +130,11 @@ class WorkoutSession:
         self.ghost_pose = GhostPose(instruction="Ready...", connections=self.ghost_connections) 
         self._frames_in_active = 0 
         self.gesture_active_until = 0.0
+        
+        # Reset verification state
+        self.wrong_exercise_counter = 0
+        self.wrong_exercise_detected = False
+        self.wrong_exercise_reason = ""
 
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -187,14 +200,40 @@ class WorkoutSession:
                 self._process_workout(results, current_time)
 
         # --- CLEAN RENDERING ---
-        # Removed "Optimal Flow" and "Transitioning" text overlays as requested
         self._draw_overlay(image, results) 
         
         return image, True
 
     def _draw_overlay(self, image: np.ndarray, results=None):
-        """Draws clean overlay without technical black boxes"""
+        """Draws clean overlay, including the new red warning box for wrong exercises"""
         h, w, _ = image.shape
+
+        # --- WRONG EXERCISE WARNING (VISUAL) ---
+        if self.wrong_exercise_detected and results and results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
+            x_coords = [lm.x for lm in landmarks]
+            y_coords = [lm.y for lm in landmarks]
+            
+            # Calculate bounding box
+            x_min, x_max = int(min(x_coords) * w), int(max(x_coords) * w)
+            y_min, y_max = int(min(y_coords) * h), int(max(y_coords) * h)
+            
+            # Add padding
+            pad = 20
+            x_min, x_max = max(0, x_min - pad), min(w, x_max + pad)
+            y_min, y_max = max(0, y_min - pad), min(h, y_max + pad)
+            
+            # Draw Red Box
+            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 0, 255), 5)
+            
+            # Draw Warning Text background
+            cv2.rectangle(image, (x_min, y_min - 40), (x_max, y_min), (0, 0, 255), -1)
+            cv2.putText(image, f"WARNING: {self.wrong_exercise_reason.upper()}", 
+                        (x_min + 5, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.7, (255, 255, 255), 2)
+            
+            # DON'T DRAW GHOST IF WRONG EXERCISE DETECTED
+            return
 
         if self.show_ghost:
             ghost_color = self.get_cv_color(self.ghost_pose.color)
@@ -217,13 +256,47 @@ class WorkoutSession:
                 )
 
     def _process_workout(self, results, current_time: float):
-        """Handles workout logic, accuracy, and form feedback"""
+        """Handles workout logic, accuracy, form feedback, and exercise verification"""
         from constants import ArmStage 
         
         if not results.pose_landmarks:
             self.ghost_pose.instruction = "Please step into view"
             return
         
+        landmarks = results.pose_landmarks.landmark
+
+        # --- EXERCISE VERIFICATION ---
+        # Check if user is doing the wrong exercise
+        is_wrong, reason = self.verifier.check_mismatch(landmarks, self.exercise_config.name)
+        
+        if is_wrong:
+            self.wrong_exercise_counter += 1
+        else:
+            # Decay counter quickly if they correct themselves
+            self.wrong_exercise_counter = max(0, self.wrong_exercise_counter - 2)
+        
+        # Trigger warning faster: 10 frames (~0.3s)
+        if self.wrong_exercise_counter > 10:
+            self.wrong_exercise_detected = True
+            self.wrong_exercise_reason = reason
+        else:
+            self.wrong_exercise_detected = False
+
+        # --- CRITICAL: BLOCK REPS & FORCE SPEECH IF WRONG EXERCISE ---
+        if self.wrong_exercise_detected:
+            warning_msg = f"Stop! {self.wrong_exercise_reason}"
+            
+            # Update Feedback for Speech/TTS
+            # This forces the frontend to read out "Stop! Squat Detected" etc.
+            self.arm_metrics['RIGHT'].feedback = warning_msg
+            self.arm_metrics['LEFT'].feedback = warning_msg
+            self.arm_metrics['RIGHT'].feedback_color = "RED"
+            self.arm_metrics['LEFT'].feedback_color = "RED"
+            
+            # We skip Rep Counting entirely
+            return 
+
+        # --- NORMAL PROCESSING ---
         if (current_time - self.last_ai_check) > self.ai_interval:
             self.last_ai_check = current_time
             self._update_ai_latch(results)
