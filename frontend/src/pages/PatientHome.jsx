@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
-import { Play, Activity, CheckCircle, List, Dumbbell, User } from 'lucide-react';
+import { Play, Activity, CheckCircle, List, Dumbbell } from 'lucide-react';
 import './PatientHome.css';
 
 const PatientHome = () => {
@@ -23,23 +23,28 @@ const PatientHome = () => {
     useEffect(() => {
         const fetchHistory = async () => {
             try {
-                // 1. Get Token safely
-                const storedData = localStorage.getItem('physio_user');
-                let token = '';
-                if (storedData) {
-                    const parsed = JSON.parse(storedData);
-                    token = parsed.token || ''; // Adjust if your object structure is different
+                // 1. Get Token Robustly (Check Context first, then LocalStorage)
+                let token = user?.token;
+
+                if (!token) {
+                    const storedData = localStorage.getItem('physio_user');
+                    if (storedData) {
+                        const parsed = JSON.parse(storedData);
+                        token = parsed.token;
+                    }
                 }
 
-                if (!token && !user) {
+                if (!token) {
                     console.warn("No auth token found, skipping fetch.");
                     setLoading(false);
                     return;
                 }
 
-                // 2. Fetch Data
+                // 2. Fetch Data with Correct Headers
                 const res = await axios.get('http://localhost:5000/api/sessions/my-history', {
-                     headers: { 'x-auth-token': token }
+                     headers: { 
+                        'Authorization': `Bearer ${token}` // Fixed Header Format
+                     }
                 });
                 
                 const history = res.data || [];
@@ -53,7 +58,7 @@ const PatientHome = () => {
                     const uniqueEx = new Set(
                         history.map(s => 
                             s.protocol?.exerciseName || 
-                            s.exercise || // Fallback for raw sessions
+                            s.exercise || 
                             'Unknown'
                         )
                     ).size;
@@ -68,13 +73,17 @@ const PatientHome = () => {
                 }
             } catch (err) {
                 console.error("Failed to fetch session history:", err.message);
+                if (err.response && err.response.status === 401) {
+                    // Optional: Redirect to login if token is invalid
+                    // navigate('/auth/login');
+                }
             } finally {
                 setLoading(false);
             }
         };
 
         fetchHistory();
-    }, [user]);
+    }, [user]); // Re-run if user context changes
 
     const StatCard = ({ label, value, subLabel, icon: Icon, color, delay }) => (
         <motion.div 
@@ -175,7 +184,7 @@ const PatientHome = () => {
                                                     {sess.qualityScore || 0}%
                                                 </span>
                                             </td>
-                                            <td style={{ fontWeight: '500' }}>{sess.reps || sess.total_reps || 0}</td>
+                                            <td style={{ fontWeight: '500' }}>{sess.reps || 0}</td>
                                             <td style={{ color: '#718096', fontSize: '0.9rem' }}>
                                                 {new Date(sess.performedAt || sess.timestamp * 1000 || Date.now()).toLocaleDateString()}
                                             </td>
