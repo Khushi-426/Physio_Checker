@@ -37,11 +37,17 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# UPDATED CORS: Explicitly allow all origins and headers
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+# --- CORS FIX: Explicitly allow localhost:5173 with credentials ---
+# Do not use "*" with supports_credentials=True
+CORS(app, resources={r"/*": {
+    "origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5000"],
+    "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+    "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+}}, supports_credentials=True)
+
 bcrypt = Bcrypt(app)
 
-# SWITCHED TO THREADING MODE (Removes Eventlet dependency)
+# SWITCHED TO THREADING MODE
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # Configure logging
@@ -64,7 +70,6 @@ mail = Mail(app)
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "physiocheck_db"
 
-# Initialize as None to handle connection failures gracefully
 client = None
 db = None
 users_collection = None
@@ -78,12 +83,11 @@ try:
     print("⏳ Attempting to connect to MongoDB...")
     client = MongoClient(
         MONGO_URI,
-        serverSelectionTimeoutMS=5000, # 5 second timeout
+        serverSelectionTimeoutMS=5000, 
         tls=True,
         tlsCAFile=certifi.where(),
         tlsAllowInvalidCertificates=True,
     )
-    # Trigger a connection verify
     client.admin.command("ping")
     db = client[DB_NAME]
 
@@ -107,7 +111,6 @@ last_session_report = None
 session_lock = threading.Lock()
 
 def get_camera_index():
-    """Detects available camera index."""
     for i in range(2):
         cap = cv2.VideoCapture(i)
         if cap.isOpened():
@@ -116,11 +119,8 @@ def get_camera_index():
     return 0 
 
 def init_session(exercise_name="Bicep Curl"):
-    """Initialize a new workout session with clean visuals and accuracy logic."""
     global workout_session, last_session_report
-    
     with session_lock:
-        # 1. Force close existing session
         if workout_session:
             try:
                 print("🛑 Stopping previous session...")
@@ -130,14 +130,11 @@ def init_session(exercise_name="Bicep Curl"):
             finally:
                 workout_session = None
 
-        # Reset last report for new session
         last_session_report = None
         
-        # 2. Start new session
         print(f"🎥 Initializing Camera for {exercise_name}...")
         workout_session = WorkoutSession(exercise_name)
         
-        # Camera Initialization
         cam_idx = get_camera_index()
         workout_session.cap = cv2.VideoCapture(cam_idx)
         
@@ -149,7 +146,6 @@ def init_session(exercise_name="Bicep Curl"):
         workout_session.start()
 
 def generate_video_frames():
-    """Generator function to stream video frames and accuracy data."""
     from constants import WorkoutPhase
     global workout_session
     
@@ -159,16 +155,13 @@ def generate_video_frames():
             continue
 
         try:
-            # frame is now processed without technical black boxes ("Optimal Flow", etc.)
             frame, valid = workout_session.process_frame()
             
             if not valid or frame is None:
                 continue
 
-            # Emit real-time state data (including Accuracy) to frontend via WebSocket
             socketio.emit("workout_update", workout_session.get_state_dict())
             
-            # Encode frame for HTTP Stream
             ret, buffer = cv2.imencode(".jpg", frame)
             if ret:
                 yield (
@@ -282,7 +275,6 @@ def handle_stop_session(data):
     try:
         print("🛑 Stop session command received")
         with session_lock:
-            # SAVE REPORT BEFORE STOPPING
             last_session_report = workout_session.get_final_report()
             workout_session.stop()
             workout_session = None 
@@ -314,11 +306,51 @@ def handle_toggle_listening(data):
         workout_session.set_listening(active)
 
 # ----------------------------------------------------
-# 6. ANALYTICS & AI ROUTES
+# 6. API ROUTES
 # ----------------------------------------------------
+
+# --- OPTIONS Handling for CORS Preflight ---
+@app.route("/api/exercises", methods=["OPTIONS"])
+def options_exercises():
+    return jsonify({}), 200
+
+@app.route("/api/exercises", methods=["GET"])
+def get_exercises():
+    try:
+        base_list = _get_frontend_exercise_list()
+        email = request.args.get('email')
+        assigned_titles = []
+        
+        # Only attempt DB operations if connected
+        if email and users_collection is not None:
+            try:
+                user = users_collection.find_one({"email": email})
+                if user and protocols_collection is not None:
+                    protocols = protocols_collection.find({"patient": user["_id"], "isActive": True})
+                    for p in protocols:
+                        ex_name = p.get("exerciseName", "")
+                        if "bicep" in ex_name.lower(): assigned_titles.append("Bicep Curl")
+                        elif "shoulder" in ex_name.lower(): assigned_titles.append("Shoulder Press")
+                        elif "knee" in ex_name.lower(): assigned_titles.append("Knee Lift")
+                        elif "squat" in ex_name.lower(): assigned_titles.append("Squat")
+                        elif "row" in ex_name.lower(): assigned_titles.append("Seated Row")
+            except Exception as db_err:
+                print(f"⚠️ DB Fetch Error in Exercises: {db_err}")
+                # Continue serving base list even if DB fails
+
+        for ex in base_list:
+            if ex["title"] in assigned_titles:
+                ex["recommended"] = True
+            else:
+                ex["recommended"] = False
+
+        return jsonify(base_list)
+    except Exception as e:
+        logger.error(f"Error in get_exercises: {e}")
+        return jsonify({"error": "Failed to fetch exercises"}), 500
+
 @app.route("/api/user/analytics_detailed", methods=["POST"])
 def analytics_detailed():
-    """Returns detailed workout history for graphs."""
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     if not email: return jsonify({"error": "Email required"}), 400
@@ -327,13 +359,11 @@ def analytics_detailed():
         return jsonify({"total_sessions": 0, "history": []})
 
     sessions = list(sessions_collection.find({"email": email}).sort("timestamp", 1))
-    
     analytics = AIEngine.get_detailed_analytics(sessions)
     return jsonify(analytics)
 
 @app.route("/api/user/ai_prediction", methods=["POST"])
 def ai_prediction():
-    """Returns AI-based recovery prediction and risk analysis."""
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     if not email: return jsonify({"error": "Email required"}), 400
@@ -342,17 +372,14 @@ def ai_prediction():
         return jsonify({"error": "Database unavailable"}), 500
 
     sessions = list(sessions_collection.find({"email": email}).sort("timestamp", 1))
-    
     prediction = AIEngine.get_recovery_prediction(sessions)
-    
     if not prediction:
-        return jsonify({"error": "Not enough data for prediction"}), 200 
+        return jsonify({"error": "Not enough data"}), 200 
 
     return jsonify(prediction)
 
 @app.route("/api/ai_coach", methods=["POST", "OPTIONS"])
 def ai_coach_commentary():
-    """Handles real-time commentary from the AI Coach engine."""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
         
@@ -380,12 +407,8 @@ def ai_coach_commentary():
         logger.error(f"AI Coach Error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ----------------------------------------------------
-# 7. GHOST TOGGLE ROUTE
-# ----------------------------------------------------
 @app.route('/toggle_ghost', methods=['POST'])
 def toggle_ghost():
-    """Toggles the ghost overlay visibility"""
     global workout_session
     if workout_session:
         new_state = workout_session.toggle_ghost()
@@ -393,26 +416,22 @@ def toggle_ghost():
     return jsonify({"status": "error", "message": "No active session"}), 400
 
 # ----------------------------------------------------
-# 8. AUTH & OTHER ROUTES
+# 7. AUTH & OTHER ROUTES
 # ----------------------------------------------------
 @app.route("/api/auth/send-otp", methods=["POST"])
 def send_otp():
     if users_collection is None:
-        return jsonify({"error": "Database unavailable. Check server logs."}), 503
-
+        return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     email = data.get("email")
-
     if users_collection.find_one({"email": email}):
         return jsonify({"error": "Email already registered"}), 400
-
     otp = "".join(random.choices(string.digits, k=6))
     otp_collection.update_one(
         {"email": email},
         {"$set": {"otp": otp, "created_at": time.time()}},
         upsert=True,
     )
-
     try:
         msg = Message("PhysioCheck OTP", sender=app.config["MAIL_USERNAME"], recipients=[email])
         msg.body = f"Your verification code is: {otp}"
@@ -420,49 +439,40 @@ def send_otp():
         return jsonify({"message": "OTP sent"}), 200
     except Exception as e:
         logger.error(f"Mail Error: {e}")
-        return jsonify({"error": "Failed to send email. Check server logs."}), 500
+        return jsonify({"error": "Failed to send email"}), 500
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     if users_collection is None:
-        return jsonify({"error": "Database unavailable. Check server logs."}), 503
-
+        return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     user = users_collection.find_one({"email": data.get("email")})
-
     if user and bcrypt.check_password_hash(user["password"], data.get("password")):
         return jsonify({
             "email": user["email"],
             "role": user.get("role", "patient"),
             "name": user["name"],
-            # Generate a consistent ID/Code for therapist dashboard usage
             "therapistCode": f"DR-{user['name'][:3].upper()}-{str(int(time.time()))[-4:]}"
         })
-
     return jsonify({"error": "Invalid credentials"}), 401
 
 @app.route("/api/auth/signup-verify", methods=["POST"])
 def signup_verify():
     if users_collection is None:
-        return jsonify({"error": "Database unavailable. Check server logs."}), 503
-
+        return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     otp_input = data.get("otp")
     password = data.get("password")
     name = data.get("name")
     role = data.get("role", "patient")
-
     if not all([email, otp_input, password, name]):
         return jsonify({"error": "Missing required fields"}), 400
-
     otp_record = otp_collection.find_one({"email": email})
     if not otp_record or otp_record.get("otp") != otp_input:
         return jsonify({"error": "Invalid OTP"}), 400
-
     if users_collection.find_one({"email": email}):
         return jsonify({"error": "User already exists"}), 400
-
     hashed_pw = bcrypt.generate_password_hash(password).decode('utf-8')
     new_user = {
         "email": email, 
@@ -473,40 +483,30 @@ def signup_verify():
     }
     users_collection.insert_one(new_user)
     otp_collection.delete_one({"email": email})
-
     return jsonify({"user": {"email": email, "name": name, "role": role}}), 201
 
-# --- GOOGLE AUTH ROUTE ---
 @app.route("/api/auth/google", methods=["POST"])
 def google_auth():
     if users_collection is None:
-        return jsonify({"error": "Database unavailable. Check server logs."}), 503
-
+        return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     token = data.get("token") 
     role = data.get("role", "patient")
-
     if not token:
-        return jsonify({"error": "Google token is required"}), 400
-
+        return jsonify({"error": "Google token required"}), 400
     try:
         google_response = requests.get(
             f"https://www.googleapis.com/oauth2/v1/userinfo?access_token={token}",
             headers={"Accept": "application/json"}
         )
-        
         if google_response.status_code != 200:
             return jsonify({"error": "Invalid Google Token"}), 401
-            
         google_user = google_response.json()
         email = google_user.get("email")
         name = google_user.get("name")
-        
         if not email:
-            return jsonify({"error": "Email not found in Google profile"}), 400
-
+            return jsonify({"error": "Email not found"}), 400
         user = users_collection.find_one({"email": email})
-        
         if user:
             return jsonify({
                 "email": user["email"],
@@ -523,43 +523,29 @@ def google_auth():
                 "created_at": time.time()
             }
             users_collection.insert_one(new_user)
-            
             return jsonify({
                 "email": email,
                 "role": role,
                 "name": name
             }), 200
-
     except Exception as e:
         logger.error(f"Google Auth Error: {e}")
-        return jsonify({"error": "Internal Server Error during Google Auth"}), 500
+        return jsonify({"error": "Internal Server Error"}), 500
 
-# ----------------------------------------------------
-# 9. ASSIGN EXERCISE
-# ----------------------------------------------------
 @app.route("/api/assign", methods=["POST"])
 def assign_exercise():
-    """Allows a therapist to assign a protocol to a patient."""
     if protocols_collection is None or users_collection is None:
         return jsonify({"error": "Database unavailable"}), 503
-
     data = request.get_json(silent=True) or {}
     patient_email = data.get("patientEmail")
     exercise_name = data.get("exerciseName")
-    duration = data.get("duration", 7)
-
     if not patient_email or not exercise_name:
-        return jsonify({"error": "Patient email and exercise name required"}), 400
-
-    # 1. Find Patient
+        return jsonify({"error": "Missing fields"}), 400
     patient = users_collection.find_one({"email": patient_email})
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
-
-    # 2. Create Protocol Document
     therapist = users_collection.find_one({"role": "therapist"})
     therapist_id = therapist["_id"] if therapist else patient["_id"] 
-
     protocol_doc = {
         "therapist": therapist_id,
         "patient": patient["_id"],
@@ -571,86 +557,33 @@ def assign_exercise():
         "createdAt": datetime.now(),
         "updatedAt": datetime.now()
     }
-    
     protocols_collection.update_one(
         {"patient": patient["_id"], "exerciseName": exercise_name},
         {"$set": protocol_doc},
         upsert=True
     )
-
     return jsonify({"status": "assigned", "exercise": exercise_name}), 200
-
-# ----------------------------------------------------
-# 10. GET EXERCISES & THERAPIST ROUTES (UPDATED)
-# ----------------------------------------------------
-@app.route("/api/exercises", methods=["GET"])
-def get_exercises():
-    base_list = _get_frontend_exercise_list()
-    email = request.args.get('email')
-    assigned_titles = []
-    
-    if email and users_collection is not None and protocols_collection is not None:
-        user = users_collection.find_one({"email": email})
-        if user:
-            protocols = protocols_collection.find({"patient": user["_id"], "isActive": True})
-            for p in protocols:
-                ex_name = p.get("exerciseName", "")
-                if "bicep" in ex_name.lower(): assigned_titles.append("Bicep Curl")
-                elif "shoulder" in ex_name.lower(): assigned_titles.append("Shoulder Press")
-                elif "knee" in ex_name.lower(): assigned_titles.append("Knee Lift")
-                elif "squat" in ex_name.lower(): assigned_titles.append("Squat")
-                elif "row" in ex_name.lower(): assigned_titles.append("Seated Row")
-
-    for ex in base_list:
-        if ex["title"] in assigned_titles:
-            ex["recommended"] = True
-        else:
-            ex["recommended"] = False
-
-    return jsonify(base_list)
 
 @app.route("/api/therapist/patients", methods=["GET"])
 def therapist_patients():
-    """
-    Returns enriched patient data including:
-    - Current Risk Status (High Risk / Alert / Normal)
-    - Last Session Timestamp
-    - Recent Activity Flag (within 24h)
-    """
     if users_collection is None: return jsonify({"patients": []}), 200
-
-    # 1. Fetch all patients
     patients = list(users_collection.find({"role": "patient"}, {"_id": 0, "name": 1, "email": 1, "created_at": 1}))
     enriched = []
-    
-    # 2. Time threshold for 'Recent Activity' (24 hours ago)
     one_day_ago = time.time() - 86400 
-
     for p in patients:
-        # Get the LAST session for this patient to determine current status
         last = sessions_collection.find_one({"email": p["email"]}, sort=[("timestamp", -1)])
-        
         status = "Normal"
         last_session_ts = None
         recent_activity_type = None
-
         if last:
             last_session_ts = last.get("timestamp")
-            
-            # Risk Logic based on last performance
             reps = last.get("total_reps", 0)
             errors = last.get("total_errors", 0)
-            
-            # Simple Accuracy Calculation
             accuracy = max(0, 100 - int((errors / max(reps, 1)) * 20)) if reps > 0 else 0
-            
             if accuracy < 60: status = "High Risk"
             elif accuracy < 80: status = "Alert"
-            
-            # Check if this session happened in the last 24 hours
             if last_session_ts and last_session_ts > one_day_ago:
                 recent_activity_type = "Session Completed"
-
         enriched.append({
             "id": str(p["email"]), 
             "name": p.get("name", "Unknown"),
@@ -659,9 +592,8 @@ def therapist_patients():
             "status": status,
             "last_session_ts": last_session_ts,
             "recent_activity": recent_activity_type, 
-            "hasActiveProtocol": False # Placeholder
+            "hasActiveProtocol": False 
         })
-        
     return jsonify({"patients": enriched}), 200
 
 @app.route("/api/therapist/notifications", methods=["GET"])
@@ -679,17 +611,12 @@ def therapist_notifications():
         })
     return jsonify(response), 200
 
-# ----------------------------------------------------
-# 11. STREAMING ROUTES
-# ----------------------------------------------------
 @app.route("/start_tracking", methods=["POST", "OPTIONS"])
 def start_tracking():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-
     data = request.get_json(silent=True) or {}
     exercise = data.get("exercise", "Bicep Curl")
-
     try:
         init_session(exercise)
         if workout_session:
@@ -721,18 +648,12 @@ def video_feed():
 @app.route("/report_data")
 def report_data():
     global workout_session, last_session_report
-    
     if workout_session:
         return jsonify(workout_session.get_final_report())
-    
     if last_session_report:
         return jsonify(last_session_report)
-        
     return jsonify({"error": "No session data found"})
 
-# ----------------------------------------------------
-# 12. RUN SERVER
-# ----------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Starting Server with THREADING on Port 5001...")
     socketio.run(app, host="0.0.0.0", port=5001, debug=True, allow_unsafe_werkzeug=True)

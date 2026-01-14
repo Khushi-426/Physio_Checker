@@ -102,7 +102,7 @@ const Tracker = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
 
-  // Data State (Includes Accuracy)
+  // Data State (Includes Accuracy & Gesture Fix)
   const [data, setData] = useState({
     RIGHT: {
       feedback_color: "GRAY",
@@ -125,6 +125,7 @@ const Tracker = () => {
     remaining: 0,
     exercise_name: "",
     tracked_joint_name: "",
+    gesture: "None", // FIXED: Initialized gesture to prevent crash
     ghost_pose: {
       landmarks: {},
       color: "GRAY",
@@ -151,31 +152,37 @@ const Tracker = () => {
 
   // --- 1. SETUP SOCKET CONNECTION & FETCH EXERCISES ---
   useEffect(() => {
-    const newSocket = io(API_URL);
-    setSocket(newSocket);
+    let newSocket;
+    try {
+        newSocket = io(API_URL);
+        setSocket(newSocket);
 
-    newSocket.on("connect", () => {
-      console.log("WebSocket Connected");
-      setConnectionStatus("CONNECTED");
-    });
+        newSocket.on("connect", () => {
+        console.log("WebSocket Connected");
+        setConnectionStatus("CONNECTED");
+        });
 
-    newSocket.on("connect_error", (err) => {
-      console.error("Socket Connection Error:", err);
-      setConnectionStatus("DISCONNECTED");
-    });
+        newSocket.on("connect_error", (err) => {
+        console.error("Socket Connection Error:", err);
+        setConnectionStatus("DISCONNECTED");
+        });
 
-    newSocket.on("disconnect", () => {
-      setConnectionStatus("DISCONNECTED");
-    });
+        newSocket.on("disconnect", () => {
+        setConnectionStatus("DISCONNECTED");
+        });
 
-    newSocket.on("session_stopped", () => {
-      handleExitNavigation();
-    });
+        newSocket.on("session_stopped", () => {
+        handleExitNavigation();
+        });
 
-    newSocket.on("workout_update", (json) => {
-      setData(json);
-      handleWorkoutUpdate(json);
-    });
+        newSocket.on("workout_update", (json) => {
+        // FIXED: Merge state instead of replace to preserve defaults like 'gesture' if missing
+        setData((prev) => ({ ...prev, ...json }));
+        handleWorkoutUpdate(json);
+        });
+    } catch (e) {
+        console.error("Socket initialization failed", e);
+    }
 
     // Initial Fetch
     fetchExercises();
@@ -183,7 +190,7 @@ const Tracker = () => {
     return () => {
       if (stopTimeoutRef.current) clearTimeout(stopTimeoutRef.current);
       if (timerRef.current) clearInterval(timerRef.current);
-      newSocket.close();
+      if (newSocket) newSocket.close();
       window.speechSynthesis.cancel();
     };
   }, [navigate]);
@@ -443,7 +450,7 @@ const Tracker = () => {
             </p>
           </div>
           <button
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/patient-dashboard")}
             style={{
               background: "#fff",
               border: "1px solid #ddd",
@@ -1181,7 +1188,7 @@ const Tracker = () => {
             )}
 
             <AnimatePresence>
-              {/* CALIBRATION / COUNTDOWN OVERLAYS (No technical jargon boxes) */}
+              {/* CALIBRATION / COUNTDOWN OVERLAYS */}
               {data?.status === "CALIBRATION" && (
                 <motion.div
                   initial={{ opacity: 0 }}
@@ -1304,7 +1311,7 @@ const Tracker = () => {
             feedback={feedback}
             exerciseName={selectedExercise?.title}
             active={active}
-            gesture={data.gesture}
+            gesture={data.gesture || "None"} // FIXED: Safe fallback for gesture
             onCommand={handleBotCommand}
             onListeningChange={handleListeningChange}
             userEmail={user?.email}
