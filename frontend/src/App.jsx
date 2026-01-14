@@ -12,7 +12,8 @@ import { AuthProvider } from "./context/AuthContext";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 
 // --- DASHBOARD COMPONENTS ---
-import PatientDashboard from "./Dashboard";
+import Dashboard from "./Dashboard"; // Public Landing
+import PatientHome from "./pages/PatientHome"; // Authenticated Dashboard
 import TherapistDashboard from "./TherapistDashboard";
 import HomeRedirect from "./HomeRedirect";
 
@@ -31,8 +32,6 @@ import Tutorial from "./Tutorial";
 import Profile from "./pages/Profile";
 import Analytics from "./pages/Analytics";
 import RiskPrediction from "./pages/RiskPrediction";
-
-// REAL IMPORTS
 import MedicalRecord from "./pages/MedicalRecord";
 import MyPrograms from "./pages/MyPrograms";
 
@@ -42,11 +41,8 @@ import * as Pages from "./pages/PlaceholderPages";
 const GOOGLE_CLIENT_ID =
   "254404106678-ql7lb3kidfsvdjk5a4fcjl7t7kn61aos.apps.googleusercontent.com";
 
-// --- LAYOUT COMPONENT ---
 const Layout = ({ children }) => {
   const location = useLocation();
-
-  // Hide navbar on tracking and therapist pages
   const isTrackingPage = location.pathname === "/track";
   const isTherapistPage = location.pathname.startsWith("/therapist");
 
@@ -71,42 +67,19 @@ function App() {
               <Route path="/" element={<HomeRedirect />} />
 
               {/* --- DASHBOARDS --- */}
-              <Route path="/patient-dashboard" element={<PatientDashboard />} />
+              <Route path="/patient-dashboard" element={<PatientHome />} />
               <Route
                 path="/therapist-dashboard"
                 element={<TherapistDashboard />}
               />
 
               {/* --- THERAPIST ROUTES --- */}
-              <Route
-                path="/therapist/monitoring"
-                element={<TherapistPatientMonitoring />}
-              />
-              <Route
-                path="/therapist/assignments"
-                element={<TherapistAssignmentManager />}
-              />
-              <Route
-                path="/therapist/notifications"
-                element={<TherapistNotificationLog />}
-              />
-              <Route
-                path="/therapist/analytics"
-                element={<TherapistAnalytics />}
-              />
-              <Route
-                path="/therapist/session-review/:sessionId"
-                element={
-                  <SessionReviewScreen
-                    onClose={() => {}}
-                    sessionId="MOCK_ID_123"
-                  />
-                }
-              />
-              <Route
-                path="/therapist/patient-detail/:email"
-                element={<TherapistPatientDetail />}
-              />
+              <Route path="/therapist/monitoring" element={<TherapistPatientMonitoring />} />
+              <Route path="/therapist/assignments" element={<TherapistAssignmentManager />} />
+              <Route path="/therapist/notifications" element={<TherapistNotificationLog />} />
+              <Route path="/therapist/analytics" element={<TherapistAnalytics />} />
+              <Route path="/therapist/session-review/:sessionId" element={<SessionReviewScreen onClose={() => {}} sessionId="MOCK_ID_123" />} />
+              <Route path="/therapist/patient-detail/:email" element={<TherapistPatientDetail />} />
 
               {/* --- PATIENT CORE --- */}
               <Route path="/track" element={<Tracker />} />
@@ -114,10 +87,7 @@ function App() {
 
               {/* --- TRAINING --- */}
               <Route path="/training/library" element={<Tutorial />} />
-              <Route
-                path="/training/detail"
-                element={<Pages.ExerciseDetail />}
-              />
+              <Route path="/training/detail" element={<Pages.ExerciseDetail />} />
 
               {/* --- AUTH --- */}
               <Route path="/auth/login" element={<Pages.Login />} />
@@ -127,23 +97,15 @@ function App() {
               {/* --- PROFILE --- */}
               <Route path="/profile/overview" element={<Profile />} />
               <Route path="/profile/medical" element={<MedicalRecord />} />
-              <Route
-                path="/profile/preferences"
-                element={<Pages.Preferences />}
-              />
+              <Route path="/profile/preferences" element={<Pages.Preferences />} />
 
               {/* --- PROGRAMS --- */}
               <Route path="/programs/my-programs" element={<MyPrograms />} />
-              <Route
-                path="/programs/custom"
-                element={<Pages.CustomProgram />}
-              />
+              <Route path="/programs/custom" element={<Pages.CustomProgram />} />
 
               {/* --- ANALYTICS --- */}
               <Route path="/analytics/accuracy" element={<Analytics />} />
               <Route path="/analytics/risk" element={<RiskPrediction />} />
-
-              {/* --- COMMUNITY ROUTES REMOVED HERE --- */}
 
               {/* --- SUPPORT --- */}
               <Route path="/support/faq" element={<Pages.FAQ />} />
