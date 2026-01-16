@@ -1,99 +1,48 @@
-// frontend/src/pages/PatientHome.jsx
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Play, Activity, CheckCircle, List, Dumbbell } from 'lucide-react';
+import { Play, Activity, CheckCircle, Dumbbell, History } from 'lucide-react';
 import './PatientHome.css';
-
-// --- MOCK DATA: ONLY BICEP CURLS ---
-const MOCK_HISTORY = [
-    {
-        id: 1,
-        exercise: "Bicep Curls",
-        qualityScore: 94,
-        reps: 15,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(), // 2 hours ago
-        duration: "12 min"
-    },
-    {
-        id: 2,
-        exercise: "Bicep Curls",
-        qualityScore: 88,
-        reps: 12,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(), // 1 day ago
-        duration: "08 min"
-    },
-    {
-        id: 3,
-        exercise: "Bicep Curls",
-        qualityScore: 92,
-        reps: 20,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(), // 2 days ago
-        duration: "15 min"
-    },
-    {
-        id: 4,
-        exercise: "Bicep Curls",
-        qualityScore: 78,
-        reps: 10,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(), // 3 days ago
-        duration: "10 min"
-    },
-    {
-        id: 5,
-        exercise: "Bicep Curls",
-        qualityScore: 96,
-        reps: 25,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 96).toISOString(), // 4 days ago
-        duration: "18 min"
-    },
-    {
-        id: 6,
-        exercise: "Bicep Curls",
-        qualityScore: 85,
-        reps: 15,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 120).toISOString(), // 5 days ago
-        duration: "12 min"
-    },
-    {
-        id: 7,
-        exercise: "Bicep Curls",
-        qualityScore: 89,
-        reps: 30,
-        performedAt: new Date(Date.now() - 1000 * 60 * 60 * 144).toISOString(), // 6 days ago
-        duration: "10 min"
-    }
-];
 
 const PatientHome = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
     const [loading, setLoading] = useState(true);
-    
-    // Hardcoded stats
+    const [history, setHistory] = useState([]);
     const [stats, setStats] = useState({
-        avgAccuracy: 89,
-        totalSessions: 22,
-        totalReps: 180,
-        uniqueExercises: 1, // Only 1 unique exercise type now
-        recentHistory: []
+        avgAccuracy: 0,
+        totalSessions: 0,
+        totalReps: 0
     });
 
     useEffect(() => {
-        // Simulate a "fetch" to make the UI transition feel natural
-        const loadFakeData = () => {
-            setTimeout(() => {
-                setStats(prev => ({
-                    ...prev,
-                    recentHistory: MOCK_HISTORY
-                }));
+        const fetchSessionHistory = async () => {
+            if (!user?.email) return;
+            try {
+                const response = await fetch(`http://localhost:5001/api/sessions/my-history?email=${user.email}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setHistory(data);
+                    // Calculate totals
+                    const totalReps = data.reduce((acc, curr) => acc + (curr.reps || 0), 0);
+                    const avgAcc = data.length > 0 
+                        ? Math.round(data.reduce((acc, curr) => acc + (curr.qualityScore || 0), 0) / data.length) 
+                        : 0;
+                    setStats({
+                        avgAccuracy: avgAcc,
+                        totalSessions: data.length,
+                        totalReps: totalReps
+                    });
+                }
+            } catch (err) {
+                console.error("Fetch Error:", err);
+            } finally {
                 setLoading(false);
-            }, 800);
+            }
         };
-
-        loadFakeData();
-    }, []);
+        fetchSessionHistory();
+    }, [user]);
 
     const StatCard = ({ label, value, subLabel, icon: Icon, color, delay }) => (
         <motion.div 
@@ -103,12 +52,12 @@ const PatientHome = () => {
             transition={{ delay: delay }}
         >
             <div className="stat-icon-box" style={{ background: `${color}15`, color: color }}>
-                <Icon size={24} />
+                <Icon size={22} />
             </div>
             <div className="stat-info">
                 <span className="stat-label">{label}</span>
                 <h3 className="stat-value">{value}</h3>
-                {subLabel && <span className="stat-sub">{subLabel}</span>}
+                <span className="stat-sub" style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{subLabel}</span>
             </div>
         </motion.div>
     );
@@ -119,17 +68,12 @@ const PatientHome = () => {
                 <div className="hologram-wrapper">
                     <img src="/human.png" alt="Biometric Scan" className="human-model" />
                     <div className="scan-line"></div>
-                    <div className="joint-marker shoulder-l"></div>
-                    <div className="joint-marker knee-r"></div>
-                    
                     <div className="model-status">
                         <div className="status-dot"></div>
-                        <span>LIVE TRACKING ACTIVE</span>
+                        <span>LIVE BIOMETRICS ACTIVE</span>
                     </div>
-
                     <button className="start-session-btn" onClick={() => navigate('/track')}>
-                        <Play size={20} fill="currentColor" /> 
-                        <span>START THERAPY</span>
+                        <Play size={18} fill="white" /> <span>START NEW SESSION</span>
                     </button>
                 </div>
             </section>
@@ -137,100 +81,72 @@ const PatientHome = () => {
             <section className="right-panel">
                 <header className="dashboard-header">
                     <div>
-                        <h1 className="main-title">PhysioCheck Dashboard</h1>
-                        <p className="sub-title">Welcome back, {user?.name || 'Alex'}</p>
+                        <h1 className="main-title">Recovery Analytics</h1>
+                        <p className="sub-title">Patient Portal • {user?.name || 'Alex'}</p>
                     </div>
-                    <div className="system-status">
-                        <span className="pulse-icon"></span> System Online
+                    <div className="system-status" style={{ color: '#10B981', fontWeight: '700', fontSize: '0.8rem' }}>
+                        ● DATABASE SYNCED
                     </div>
                 </header>
 
-                {/* Hardcoded Stats Grid */}
                 <div className="stats-grid-new">
-                    <StatCard label="Avg Accuracy" value={`${stats.avgAccuracy}%`} subLabel="Target: >85%" icon={CheckCircle} color="#10B981" delay={0.1} />
-                    <StatCard label="Total Sessions" value={stats.totalSessions} subLabel="Completed" icon={Activity} color="#3B82F6" delay={0.2} />
-                    <StatCard label="Total Reps" value={stats.totalReps} subLabel="Cumulative" icon={Dumbbell} color="#F59E0B" delay={0.3} />
-                    <StatCard label="Exercises" value={stats.uniqueExercises} subLabel="Active Protocols" icon={List} color="#8B5CF6" delay={0.4} />
+                    <StatCard label="Avg. Accuracy" value={`${stats.avgAccuracy}%`} subLabel="Target: 85%" icon={CheckCircle} color="#10B981" delay={0.1} />
+                    <StatCard label="Total Workouts" value={stats.totalSessions} subLabel="Sessions Saved" icon={Activity} color="#3B82F6" delay={0.2} />
+                    <StatCard label="Total Reps" value={stats.totalReps} subLabel="Lifetime Progress" icon={Dumbbell} color="#F59E0B" delay={0.3} />
                 </div>
 
                 <motion.div 
                     className="clinical-table-wrapper"
-                    initial={{ opacity: 0, y: 10 }}
+                    initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.5 }}
+                    transition={{ delay: 0.4 }}
                 >
                     <div className="table-header">
-                        <h3>Session History</h3>
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <button className="export-btn" style={{ background: '#f0fdf4', color: '#166534', border: '1px solid #dcfce7' }}>
-                                <CheckCircle size={14} style={{ marginRight: '5px' }}/> All Completed
-                            </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <History size={20} color="#2C5D31" />
+                            <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#1A3C34' }}>Session History</h3>
                         </div>
                     </div>
-                    
+
                     {loading ? (
-                        <div style={{ padding: '40px', textAlign: 'center', color: '#888' }}>
-                            Retrieving clinical records...
-                        </div>
+                        <div style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>Syncing data...</div>
+                    ) : history.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>No activity found.</div>
                     ) : (
                         <table className="clinical-table">
                             <thead>
                                 <tr>
-                                    <th>EXERCISE PROTOCOL</th>
-                                    <th>PERFORMANCE</th>
-                                    <th>REPS</th>
-                                    <th>DATE & TIME</th>
-                                    <th>STATUS</th>
+                                    <th>Exercise Protocol</th>
+                                    <th>Performance</th>
+                                    <th>Reps</th>
+                                    <th>Date & Time</th>
+                                    <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {stats.recentHistory.map((sess) => (
-                                    <tr key={sess.id}>
+                                {history.map((sess) => (
+                                    <tr key={sess._id}>
                                         <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                                <div style={{ padding: '8px', borderRadius: '8px', background: '#F3F4F6' }}>
-                                                    <Activity size={16} color="#4B5563"/>
-                                                </div>
-                                                <div>
-                                                    <div style={{ fontWeight: '600', color: '#1F2937' }}>{sess.exercise}</div>
-                                                    <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>Duration: {sess.duration}</div>
-                                                </div>
+                                            <div style={{ fontWeight: '700', color: '#1e293b' }}>{sess.exerciseType}</div>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                {sess.duration ? `${Math.floor(sess.duration / 60)}m ${Math.round(sess.duration % 60)}s` : 'N/A'}
                                             </div>
                                         </td>
                                         <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                                 <div className="perf-bar-container" style={{ width: '80px', height: '6px' }}>
-                                                    <div className="perf-bar" style={{ 
-                                                        width: `${sess.qualityScore}%`, 
-                                                        background: sess.qualityScore > 85 ? '#10B981' : '#F59E0B' 
-                                                    }}></div>
+                                                    <div style={{ width: `${sess.qualityScore}%`, height: '100%', background: sess.qualityScore > 85 ? '#10B981' : '#F59E0B' }}></div>
                                                 </div>
-                                                <span style={{ fontSize: '0.85rem', fontWeight: '700', color: sess.qualityScore > 85 ? '#059669' : '#D97706' }}>
-                                                    {sess.qualityScore}%
-                                                </span>
+                                                <span style={{ fontWeight: '800', fontSize: '0.85rem' }}>{sess.qualityScore}%</span>
                                             </div>
                                         </td>
-                                        <td style={{ fontWeight: '600', color: '#374151' }}>{sess.reps}</td>
+                                        <td style={{ fontWeight: '700' }}>{sess.reps}</td>
                                         <td>
-                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                <span style={{ color: '#374151', fontSize: '0.9rem', fontWeight: '500' }}>
-                                                    {new Date(sess.performedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                                </span>
-                                                <span style={{ color: '#9CA3AF', fontSize: '0.75rem' }}>
-                                                    {new Date(sess.performedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                </span>
-                                            </div>
+                                            <div style={{ fontSize: '0.9rem', fontWeight: '600' }}>{new Date(sess.performedAt).toLocaleDateString()}</div>
+                                            <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{new Date(sess.performedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                         </td>
                                         <td>
-                                            <div style={{ 
-                                                display: 'inline-flex', alignItems: 'center', gap: '6px',
-                                                padding: '6px 12px', borderRadius: '20px',
-                                                background: '#ECFDF5', color: '#047857',
-                                                fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.5px'
-                                            }}>
-                                                <CheckCircle size={12} strokeWidth={3} />
-                                                COMPLETED
-                                            </div>
+                                            <span style={{ background: '#ecfdf5', color: '#047857', padding: '4px 12px', borderRadius: '20px', fontSize: '0.7rem', fontWeight: '800' }}>SYNCED</span>
                                         </td>
                                     </tr>
                                 ))}

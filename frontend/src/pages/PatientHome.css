@@ -6,8 +6,8 @@
   --bg-color: #FDFCFB;
   --glass-white: rgba(255, 255, 255, 0.95);
   --glass-border: rgba(255, 255, 255, 0.6);
-  --text-dark: #1A202C;
-  --text-muted: #718096;
+  --text-dark: #1A3C34;
+  --text-muted: #64748b;
   --accent-green: #2C5D31;
 }
 
@@ -26,7 +26,7 @@ html { scroll-behavior: smooth; }
 
 /* --- LEFT PANEL --- */
 .left-panel {
-  width: 35%;
+  width: 32%;
   height: 100%;
   position: relative;
   background: radial-gradient(circle at 30% 50%, #eef5f0 0%, #dcece2 100%);
@@ -47,43 +47,64 @@ html { scroll-behavior: smooth; }
 }
 
 .human-model {
-  height: 70%; /* Reduced slightly to prevent overflow */
+  height: 75%;
   object-fit: contain;
   opacity: 0.9;
   filter: drop-shadow(0 0 30px rgba(44, 93, 49, 0.2));
   z-index: 2;
 }
 
-/* ... (Keep existing sci-fi animations: scan-line, joint-marker, etc.) ... */
 .scan-line {
-    position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: rgba(44, 93, 49, 0.3);
-    box-shadow: 0 0 10px rgba(44, 93, 49, 0.5);
-    animation: scan 4s ease-in-out infinite; z-index: 1;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: rgba(44, 93, 49, 0.3);
+  box-shadow: 0 0 10px rgba(44, 93, 49, 0.5);
+  animation: scan 4s ease-in-out infinite;
+  z-index: 1;
 }
-@keyframes scan { 0% { top: 10%; opacity: 0; } 50% { opacity: 1; } 100% { top: 90%; opacity: 0; } }
-.joint-marker { position: absolute; width: 12px; height: 12px; border: 2px solid #2C5D31; border-radius: 50%; z-index: 3; }
-.shoulder-l { top: 28%; left: 55%; } .knee-r { top: 65%; left: 45%; }
-.model-status { position: absolute; top: 40px; left: 40px; display: flex; align-items: center; gap: 8px; font-size: 0.75rem; font-weight: 700; color: var(--accent-green); letter-spacing: 2px; }
-.status-dot { width: 8px; height: 8px; background: #10B981; border-radius: 50%; box-shadow: 0 0 10px #10B981; animation: pulse 2s infinite; }
+
+@keyframes scan {
+  0% { top: 10%; opacity: 0; }
+  50% { opacity: 1; }
+  100% { top: 90%; opacity: 0; }
+}
+
+.model-status {
+  position: absolute;
+  top: 40px; left: 40px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.75rem; font-weight: 700;
+  color: var(--accent-green); letter-spacing: 2px;
+}
+
+.status-dot {
+  width: 8px; height: 8px;
+  background: #10B981; border-radius: 50%;
+  box-shadow: 0 0 10px #10B981;
+  animation: pulse 2s infinite;
+}
 
 .start-session-btn {
-  margin-top: -20px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  padding: 18px 40px;
+  margin-top: 20px;
+  background: var(--accent-green);
+  border: none;
+  padding: 18px 45px;
   border-radius: 50px;
-  color: var(--accent-green);
+  color: white;
   font-weight: 800;
   font-size: 1rem;
   cursor: pointer;
   z-index: 10;
-  box-shadow: 0 15px 35px rgba(0,0,0,0.05);
+  box-shadow: 0 15px 35px rgba(44, 93, 49, 0.2);
   display: flex; align-items: center; gap: 12px;
   transition: all 0.3s ease;
 }
-.start-session-btn:hover { transform: translateY(-5px); background: white; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+
+.start-session-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 20px 40px rgba(44, 93, 49, 0.3);
+}
 
 /* --- RIGHT PANEL --- */
 .right-panel {
@@ -91,80 +112,72 @@ html { scroll-behavior: smooth; }
   padding: 3rem 4rem;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
-  overflow-y: auto;
-  scroll-behavior: smooth;
+  gap: 2.5rem;
   height: 100vh;
+  overflow: hidden;
 }
 
-.dashboard-header { display: flex; justify-content: space-between; align-items: flex-start; }
-.main-title { font-size: 2.2rem; font-weight: 800; color: var(--text-dark); margin: 0; }
+.main-title { font-size: 2.4rem; font-weight: 800; color: var(--text-dark); margin: 0; }
 .sub-title { color: var(--text-muted); font-weight: 500; margin-top: 5px; }
-.system-status { background: #E6F4EA; color: var(--accent-green); padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 
-/* --- STAT CARDS --- */
+/* --- STAT CARDS (3 COLUMN FIX) --- */
 .stats-grid-new {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); /* Increased min-width */
+  grid-template-columns: repeat(3, 1fr); /* ✅ Perfectly balanced 3-column layout */
   gap: 1.5rem;
-  width: 100%;
 }
 
 .stat-card-new {
-  background: #ffffff;
-  border-radius: 20px;
+  background: white;
   padding: 1.5rem;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.03);
-  border: 1px solid rgba(0,0,0,0.04);
+  border-radius: 20px;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  min-width: 0; /* Prevents flex items from overflowing */
+  gap: 1.2rem;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.02);
+  border: 1px solid rgba(0,0,0,0.04);
 }
 
 .stat-icon-box {
-  width: 50px; height: 50px;
+  width: 50px;
+  height: 50px;
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
 }
 
-.stat-info { display: flex; flex-direction: column; }
-.stat-label { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.stat-value { font-size: 1.8rem; font-weight: 800; margin: 2px 0; line-height: 1.1; color: var(--text-dark); }
-.stat-sub { font-size: 0.75rem; color: #A0AEC0; font-weight: 500; }
+.stat-value { font-size: 1.6rem; font-weight: 800; margin: 0; color: var(--text-dark); }
+.stat-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 600; }
 
-/* --- TABLE --- */
+/* --- SESSION HISTORY (BIGGER & SCROLLABLE) --- */
 .clinical-table-wrapper {
   background: #ffffff;
   border-radius: 24px;
-  padding: 2rem;
-  box-shadow: 0 4px 25px rgba(0,0,0,0.03);
-  border: 1px solid rgba(0,0,0,0.04);
-  flex: 1;
-  min-height: 400px;
-  overflow: hidden; /* Contains the table */
+  padding: 2.5rem;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.05);
+  flex: 1;                    /* ✅ Takes up remaining vertical space */
+  max-height: 650px;          /* ✅ Expanded height */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* FIX FOR CHART ERROR: Ensure containers in the table have explicit size if using charts there */
-.perf-bar-container {
-  width: 100px;
-  height: 6px;
-  background: #EDF2F7;
-  border-radius: 10px;
-  display: inline-block;
-  margin-right: 10px;
-  vertical-align: middle;
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
 }
-.perf-bar { height: 100%; border-radius: 10px; }
 
-/* General Table Styles */
-.table-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-.clinical-table { width: 100%; border-collapse: collapse; }
-.clinical-table th { text-align: left; font-size: 0.75rem; color: var(--text-muted); font-weight: 700; padding-bottom: 1rem; border-bottom: 2px solid rgba(0,0,0,0.03); }
-.clinical-table td { padding: 1.2rem 0; font-size: 0.95rem; color: var(--text-dark); border-bottom: 1px solid rgba(0,0,0,0.03); vertical-align: middle; }
-.status-pill { padding: 6px 14px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; }
-.status-pill.optimal { background: #ECFDF5; color: #059669; }
-.status-pill.check { background: #FFFBEB; color: #D97706; }
+.clinical-table-wrapper::-webkit-scrollbar { width: 6px; }
+.clinical-table-wrapper::-webkit-scrollbar-track { background: #f8fafc; }
+.clinical-table-wrapper::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+.clinical-table-wrapper::-webkit-scrollbar-thumb:hover { background: var(--accent-green); }
+
+.clinical-table { width: 100%; border-collapse: separate; border-spacing: 0 8px; }
+.clinical-table th { text-align: left; font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 0 10px 15px 10px; }
+.clinical-table tr { transition: transform 0.2s ease; }
+.clinical-table td { padding: 1.2rem 10px; background: white; border-bottom: 1px solid #f1f5f9; }
+
+.perf-bar-container { background: #f1f5f9; border-radius: 10px; overflow: hidden; }

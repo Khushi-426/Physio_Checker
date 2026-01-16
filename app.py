@@ -38,7 +38,6 @@ load_dotenv()
 app = Flask(__name__)
 
 # --- CORS FIX: Explicitly allow localhost:5173 with credentials ---
-# Do not use "*" with supports_credentials=True
 CORS(app, resources={r"/*": {
     "origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5000"],
     "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
@@ -264,6 +263,9 @@ def handle_disconnect():
 
 @socketio.on("stop_session")
 def handle_stop_session(data):
+    """
+    Stops the session and saves detailed metrics to MongoDB.
+    """
     global workout_session, last_session_report
     if not workout_session:
         return
@@ -280,17 +282,45 @@ def handle_stop_session(data):
             workout_session = None 
 
         if email and sessions_collection is not None:
+            # Extract detailed metrics
             r = last_session_report["summary"]["RIGHT"]
             l = last_session_report["summary"]["LEFT"]
             
-            sessions_collection.insert_one({
+            total_reps = r["total_reps"] + l["total_reps"]
+            total_errors = r.get("error_count", 0) + l.get("error_count", 0)
+            duration = last_session_report.get("duration", 0) # Duration in seconds
+
+            # Calculate Accuracy logic (Simple: 100 - penalty per error)
+            # OR usage of new internal accuracy metric if available
+            base_accuracy = 100
+            if total_reps > 0:
+                penalty = (total_errors / total_reps) * 15 # 15% penalty per error per rep avg
+                base_accuracy = max(0, 100 - penalty)
+            elif duration > 10:
+                # If they exercised but did 0 reps, low accuracy
+                base_accuracy = 50
+            
+            # Save to MongoDB with structure matching frontend expectations
+            session_doc = {
                 "email": email,
-                "exercise": exercise,
+                "exerciseType": exercise, # Frontend expects 'exerciseType'
                 "timestamp": time.time(),
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "total_reps": r["total_reps"] + l["total_reps"],
-                "total_errors": r.get("error_count", 0) + l.get("error_count", 0),
-            })
+                "performedAt": datetime.now(), # Store as Date object for queries
+                "date_str": datetime.now().strftime("%Y-%m-%d"),
+                "duration": duration,
+                "reps": total_reps,
+                "qualityScore": int(base_accuracy),
+                "completed": True,
+                "metrics": {
+                    "leftErrors": l.get("error_count", 0),
+                    "rightErrors": r.get("error_count", 0),
+                    "leftReps": l["total_reps"],
+                    "rightReps": r["total_reps"]
+                }
+            }
+            
+            sessions_collection.insert_one(session_doc)
+            print(f"✅ Session saved for {email}: {total_reps} reps, {int(base_accuracy)}% accuracy")
 
         emit("session_stopped", {"status": "success"})
     except Exception as e:
@@ -309,7 +339,44 @@ def handle_toggle_listening(data):
 # 6. API ROUTES
 # ----------------------------------------------------
 
-# --- OPTIONS Handling for CORS Preflight ---
+# --- NEW: Session History Route for Dashboard ---
+@app.route("/api/sessions/my-history", methods=["GET", "OPTIONS"])
+def get_session_history():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    # Get email from Query Param (Easiest way given your auth setup)
+    email = request.args.get("email")
+    
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+
+    if sessions_collection is None:
+        return jsonify([]), 200
+
+    try:
+        # Fetch sessions for this user, newest first
+        cursor = sessions_collection.find({"email": email}).sort("timestamp", -1)
+        sessions = []
+        
+        for doc in cursor:
+            sessions.append({
+                "_id": str(doc["_id"]),
+                "exerciseType": doc.get("exerciseType", doc.get("exercise", "Unknown")),
+                "reps": doc.get("reps", doc.get("total_reps", 0)),
+                "qualityScore": doc.get("qualityScore", 0),
+                "duration": doc.get("duration", 0),
+                "performedAt": doc.get("timestamp", 0) * 1000, # Convert to JS ms
+                "completed": doc.get("completed", True),
+                "metrics": doc.get("metrics", {})
+            })
+            
+        return jsonify(sessions), 200
+    except Exception as e:
+        logger.error(f"Error fetching history: {e}")
+        return jsonify({"error": "Failed to fetch history"}), 500
+
+
 @app.route("/api/exercises", methods=["OPTIONS"])
 def options_exercises():
     return jsonify({}), 200
@@ -336,7 +403,6 @@ def get_exercises():
                         elif "row" in ex_name.lower(): assigned_titles.append("Seated Row")
             except Exception as db_err:
                 print(f"⚠️ DB Fetch Error in Exercises: {db_err}")
-                # Continue serving base list even if DB fails
 
         for ex in base_list:
             if ex["title"] in assigned_titles:
