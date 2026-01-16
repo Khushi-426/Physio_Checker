@@ -1,175 +1,137 @@
 // frontend/src/TherapistDashboard.jsx
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import {
-  Menu,
   LayoutDashboard,
   Users,
   FileText,
-  Bell,
-  Activity,
-  CheckCircle,
+  Search,
   ChevronRight,
+  ChevronLeft,
   LogOut,
   AlertCircle,
-  ClipboardList,
-  TrendingUp,
-  AlertTriangle,
-  CheckSquare,
-  Clock
+  Calendar,
+  User,
+  Activity,
+  TrendingUp
 } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  Tooltip,
+  ResponsiveContainer,
+  AreaChart,
+  Area
+} from "recharts";
 import "./TherapistDashboard.css";
 
 const TherapistDashboard = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState("dashboard");
-  const [copied, setCopied] = useState(false);
-  
+
   // --- STATE ---
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedPatient, setSelectedPatient] = useState(null);
+  
   const [loading, setLoading] = useState(true);
   const [patients, setPatients] = useState([]);
   const [alerts, setAlerts] = useState([]);
-  
   const [metrics, setMetrics] = useState({
-    avgRecovery: 0,
-    pendingList: [],       
-    attentionList: [],    
-    engagementScore: 0,
-    therapistCode: "..."
+    totalPatients: 0,
+    highRiskCount: 0,
+    activeProtocols: 0,
+    avgAdherence: 0,
   });
-
-  const [displayRecovery, setDisplayRecovery] = useState(0);
-
-  // --- HELPER: ADAPT & CALCULATE DATA ---
-  const adaptPatientData = (flaskData) => {
-    const rawList = flaskData.patients || [];
-    
-    return rawList.map((p) => {
-      const isHighRisk = p.status === "High Risk";
-      const isAlert = p.status === "Alert";
-      const isNormal = p.status === "Normal" || p.status === "Active";
-
-      let derivedCompletion = 85; 
-      if (isHighRisk) derivedCompletion = 45;
-      if (isAlert) derivedCompletion = 65;
-
-      return {
-        _id: p.email,
-        name: p.name || "Unknown Patient",
-        email: p.email,
-        createdAt: p.date_joined,
-        lastSessionTs: p.last_session_ts, // Real timestamp from DB
-        recentActivity: p.recent_activity, // "Session Completed" or null
-        hasActiveProtocol: p.hasActiveProtocol,
-        completionRate: derivedCompletion,
-        status: p.status, 
-        flags: {
-          nonCompliant: isHighRisk, 
-          lowScore: isAlert,
-          isNormal: isNormal
-        }
-      };
-    });
-  };
 
   // --- FETCH DATA ---
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
+        setLoading(true);
         let token = user?.token;
         if (!token) {
-            const stored = localStorage.getItem("physio_user");
-            if (stored) token = JSON.parse(stored).token;
+           const stored = localStorage.getItem("physio_user");
+           if (stored) token = JSON.parse(stored).token;
         }
 
         const response = await fetch("http://127.0.0.1:5001/api/therapist/patients", {
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { "Authorization": `Bearer ${token}` } : {})
+          headers: { 
+            "Content-Type": "application/json", 
+            "Authorization": `Bearer ${token}` 
           }
         });
 
-        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        if (!response.ok) {
+            console.error("Server Status:", response.status);
+            throw new Error("API Connection Failed");
+        }
 
         const rawData = await response.json();
-        const data = adaptPatientData(rawData);
-        
-        // --- 1. CALCULATE METRICS ---
-        const totalPatients = data.length;
-        const totalRec = data.reduce((sum, p) => sum + (p.completionRate || 0), 0);
-        const avgRec = totalPatients > 0 ? Math.round(totalRec / totalPatients) : 0;
-        
-        const pendingPatients = data.filter(p => p.flags.nonCompliant || p.flags.lowScore);
-        const attentionPatients = data.filter(p => p.flags.nonCompliant); 
-        const normalCount = data.filter(p => p.flags.isNormal).length;
-        const engagement = totalPatients > 0 ? Math.round((normalCount / totalPatients) * 100) : 0;
 
-        const tCode = user?.therapistCode || `DR-${user?.name ? user.name.substring(0,3).toUpperCase() : "PHY"}-8821`;
-
-        setPatients(data);
-        setMetrics({
-          avgRecovery: avgRec,
-          pendingList: pendingPatients,    
-          attentionList: attentionPatients, 
-          engagementScore: engagement,
-          therapistCode: tCode
-        });
-
-        // --- 2. GENERATE REAL FEED (No Mock Data) ---
-        const feedItems = [];
-
-        // A. Persistent Risks (Always show until resolved)
-        data.forEach(p => {
-          if (p.flags.nonCompliant) {
-            feedItems.push({
-              id: p._id + "_risk",
-              type: "high",
-              title: "High Risk Alert",
-              message: `${p.name} is in the danger zone (<50% accuracy).`,
-              patientId: p._id,
-              time: "Persistent"
-            });
-          }
-        });
-
-        // B. Recent Activity (Only from last 24 hours)
-        data.forEach(p => {
-          if (p.recentActivity) {
-            // Convert timestamp to readable time
-            const date = new Date(p.lastSessionTs * 1000);
-            const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            
-            feedItems.push({
-              id: p._id + "_act",
-              type: "action",
-              title: "Activity Update",
-              message: `${p.name} completed a session.`,
-              patientId: p._id,
-              time: timeStr // "10:30 AM"
-            });
-          }
-        });
-
-        // If empty
-        if (feedItems.length === 0) {
-             feedItems.push({
-              id: "empty",
-              type: "info",
-              title: "Quiet Day",
-              message: "No high risks or recent activity in the last 24h.",
-              time: "Now"
-            });
+        // CRITICAL CHECK: Ensure we have an array before mapping
+        if (!Array.isArray(rawData)) {
+            console.error("Invalid data format received:", rawData);
+            setPatients([]);
+            setLoading(false);
+            return;
         }
-        
-        setAlerts(feedItems);
+
+        // PROCESS PATIENTS
+        const processedPatients = rawData.map(p => ({
+            ...p,
+            img: `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name)}&background=random&color=fff`,
+            lastActiveDate: new Date(p.lastActive),
+            // Ensure these fields exist for the UI, default to null if missing
+            age: p.age,
+            weight: p.weight,
+            bloodGroup: p.bloodGroup
+        }));
+
+        // Sort by Last Active (Desc)
+        processedPatients.sort((a, b) => b.lastActiveDate - a.lastActiveDate);
+
+        setPatients(processedPatients);
+        if (processedPatients.length > 0) setSelectedPatient(processedPatients[0]);
+
+        // CALCULATE METRICS
+        const totalP = processedPatients.length;
+        const riskCount = processedPatients.filter(p => p.status === "High Risk").length;
+        const activeProto = processedPatients.filter(p => p.hasActiveProtocol).length;
+        const avgAdh = totalP > 0 ? Math.round(processedPatients.reduce((sum, p) => sum + p.completionRate, 0) / totalP) : 0;
+
+        setMetrics({ totalPatients: totalP, highRiskCount: riskCount, activeProtocols: activeProto, avgAdherence: avgAdh });
+
+        // GENERATE ALERTS
+        const newAlerts = [];
+        processedPatients.forEach(p => {
+            if (p.status === "High Risk") {
+                newAlerts.push({
+                    id: p._id + "_risk",
+                    type: "risk",
+                    text: `${p.name} accuracy drop detected.`,
+                    time: "Attention Needed"
+                });
+            }
+            const oneDayAgo = new Date(Date.now() - 86400000);
+            if (new Date(p.lastActive) > oneDayAgo) {
+                newAlerts.push({
+                    id: p._id + "_act",
+                    type: "success",
+                    text: `${p.name} finished a session.`,
+                    time: new Date(p.lastActive).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+                });
+            }
+        });
+
+        setAlerts(newAlerts.slice(0, 10));
         setLoading(false);
 
-      } catch (error) {
-        console.error("Dashboard Load Error:", error);
+      } catch (err) {
+        console.error("Dashboard Error:", err);
         setLoading(false);
       }
     };
@@ -177,219 +139,171 @@ const TherapistDashboard = () => {
     fetchDashboardData();
   }, [user]);
 
-  // Animation & Helpers
-  useEffect(() => {
-    let start = 0;
-    const end = metrics.avgRecovery;
-    if (start === end) return;
-    const timer = setInterval(() => {
-      start += 1;
-      setDisplayRecovery(start);
-      if (start >= end) clearInterval(timer);
-    }, 20);
-    return () => clearInterval(timer);
-  }, [metrics.avgRecovery]);
+  // SEARCH FILTER
+  const filteredPatients = useMemo(() => {
+    return patients.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  }, [patients, searchTerm]);
 
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    return hour < 12 ? "Good Morning" : hour < 18 ? "Good Afternoon" : "Good Evening";
-  };
-
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(metrics.therapistCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const getPatientStatus = (p) => {
-    if (p.flags.nonCompliant) return { label: "High Risk", class: "status-risk" };
-    if (p.flags.lowScore) return { label: "Alert", class: "status-warn" };
-    return { label: "Normal", class: "status-good" };
-  };
+  if (loading) return <div className="loading-screen">Loading Dashboard...</div>;
 
   return (
-    <div className="dashboard-container">
-      {/* SIDEBAR */}
-      <aside className={`sidebar ${isSidebarOpen ? "expanded" : "collapsed"}`}>
-        <div style={{ flex: 1 }}>
+    <div className="td-container">
+      {/* --- SIDEBAR --- */}
+      <aside className={`td-sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
+        <div className="td-logo-area">
+            {!isSidebarCollapsed && <span className="logo-text">Physio<span className="accent">Check</span></span>}
+            <button className="collapse-btn" onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}>
+                {isSidebarCollapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
+            </button>
+        </div>
+        <nav className="td-nav">
             <div className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`} onClick={() => setActiveTab("dashboard")}>
-              <LayoutDashboard size={22} /><span className="nav-label">Overview</span>
+                <LayoutDashboard size={20} />{!isSidebarCollapsed && <span>Overview</span>}
             </div>
             <div className={`nav-item ${activeTab === "patients" ? "active" : ""}`} onClick={() => navigate("/therapist/monitoring")}>
-              <Users size={22} /><span className="nav-label">Patients</span>
+                <Users size={20} />{!isSidebarCollapsed && <span>Patients</span>}
             </div>
-             <div className={`nav-item ${activeTab === "assignments" ? "active" : ""}`} onClick={() => navigate("/therapist/assignments")}>
-              <ClipboardList size={22} /><span className="nav-label">Assignments</span>
+            <div className={`nav-item ${activeTab === "assignments" ? "active" : ""}`} onClick={() => navigate("/therapist/assignments")}>
+                <FileText size={20} />{!isSidebarCollapsed && <span>Assignments</span>}
             </div>
-            <div className={`nav-item ${activeTab === "reports" ? "active" : ""}`} onClick={() => setActiveTab("reports")}>
-              <FileText size={22} /><span className="nav-label">Reports</span>
-            </div>
-        </div>
-        <div className="nav-item" onClick={logout} style={{ marginTop: "auto", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-            <LogOut size={22} /><span className="nav-label">Sign Out</span>
+        </nav>
+        <div className="td-logout" onClick={logout}>
+            <LogOut size={20} />{!isSidebarCollapsed && <span>Logout</span>}
         </div>
       </aside>
 
-      {/* MAIN CONTENT WRAPPER */}
-      <div className="main-content">
-        
-        {/* FIXED HEADER */}
-        <header className="top-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-            <button className="menu-btn" onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Menu size={24} /></button>
-            <h2 style={{ fontSize: "1.25rem", fontWeight: "700", color: "#0F2A44" }}>Physio<span style={{ color: "#2FA4A9" }}>Check</span></h2>
-          </div>
-          
-          <div className="header-right">
-            <div className="welcome-msg">{getGreeting()}, <span className="welcome-name">Dr. {user?.name?.split(' ')[0] || "Therapist"}</span></div>
-            <div className="therapist-id-badge" onClick={handleCopyCode} title="Click to copy ID">
-                {copied ? <CheckCircle size={12} /> : <CheckSquare size={12} />}
-                {copied ? "Copied!" : metrics.therapistCode}
-            </div>
-          </div>
+      {/* --- MAIN DASHBOARD --- */}
+      <main className="td-main">
+        <header className="td-header">
+            <div><h1>Dashboard Overview</h1><p className="subtitle">Welcome back, Dr. {user?.name?.split(" ")[0] || "Therapist"}</p></div>
+            <div className="header-date">{new Date().toLocaleDateString("en-US", { weekday: 'long', day: 'numeric', month: 'long'})}</div>
         </header>
 
-        {/* SCROLLABLE CONTENT */}
-        <div className="content-scroll-area">
-            
-            <section className="hero-section">
-              {/* LEFT: PRIORITY FEED */}
-              <div className="card priority-panel">
-                <div className="priority-header">
-                  <span className="priority-title"><Bell size={20} color="#EF4444" /> Live Feed</span>
-                  <span style={{ fontSize: "0.8rem", color: "#64748b", fontWeight: "600" }}>{alerts.length} Items</span>
-                </div>
-                <div className="alert-feed">
-                  {loading ? <p style={{ padding: "16px" }}>Loading...</p> : alerts.map((alert) => (
-                    <div 
-                        key={alert.id} 
-                        className={`alert-item ${alert.type === "high" ? "alert-high" : alert.type === "action" ? "alert-action" : "alert-medium"}`}
-                        onClick={() => alert.patientId && navigate(`/therapist/patient-detail/${alert.patientId}`)}
-                    >
-                        <div style={{ marginTop: "2px" }}>
-                            {alert.type === "high" ? <AlertCircle size={16} color="#DC2626" /> : 
-                             alert.type === "action" ? <Clock size={16} color="#3B82F6" /> : 
-                             <Activity size={16} color="#D97706" />}
-                        </div>
-                        <div className="alert-content">
-                            <h4>{alert.title}</h4>
-                            <p>{alert.message}</p>
-                        </div>
-                        <span className="alert-time">{alert.time}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* RIGHT: METRICS GRID */}
-              <div className="card metrics-grid">
-                
-                {/* 1. Avg Recovery */}
-                <div className="metric-item">
-                  <div className="metric-tooltip">Aggregate completion rate of all active protocols.</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                    <Activity size={18} color="#2FA4A9" />
-                    <span className="metric-label">Avg Recovery</span>
-                  </div>
-                  <span className="metric-value" style={{ color: "#2FA4A9" }}>{displayRecovery}%</span>
-                </div>
-
-                {/* 2. Pending Reviews */}
-                <div className="metric-item">
-                  <div className="metric-tooltip">
-                      Total alerts requiring review.
-                      {metrics.pendingList.length > 0 && (
-                          <ul className="tooltip-list">
-                              {metrics.pendingList.slice(0, 5).map((p, i) => (
-                                  <li key={i} className="tooltip-item">
-                                      <strong>{p.name}</strong> <span>{p.flags.nonCompliant ? "Risk" : "Alert"}</span>
-                                  </li>
-                              ))}
-                          </ul>
-                      )}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                    <FileText size={18} color="#F59E0B" />
-                    <span className="metric-label">Pending Reviews</span>
-                  </div>
-                  <span className="metric-value" style={{ color: "#F59E0B" }}>{metrics.pendingList.length}</span>
-                </div>
-
-                {/* 3. Patients Needing Attention */}
-                <div className="metric-item">
-                  <div className="metric-tooltip">
-                      Critical 'High Risk' patients.
-                      {metrics.attentionList.length > 0 && (
-                          <ul className="tooltip-list">
-                              {metrics.attentionList.slice(0, 5).map((p, i) => (
-                                  <li key={i} className="tooltip-item">
-                                      <strong>{p.name}</strong> <span style={{color: '#EF4444'}}>Low Acc.</span>
-                                  </li>
-                              ))}
-                          </ul>
-                      )}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                    <AlertTriangle size={18} color="#DC2626" />
-                    <span className="metric-label">Need Attention</span>
-                  </div>
-                  <span className="metric-value" style={{ color: "#DC2626" }}>{metrics.attentionList.length}</span>
-                </div>
-
-                {/* 4. Wide Engagement Score */}
-                <div className="metric-item metric-wide">
-                  <div className="metric-tooltip">Percentage of patients with 'Normal' status (Healthy Engagement).</div>
-                  <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
-                        <TrendingUp size={24} color="#0284C7" />
-                        <span className="metric-label" style={{ fontSize: "1.1rem", color: "#0369A1" }}>Weekly Engagement Score</span>
-                      </div>
-                      <p style={{ margin: 0, fontSize: "0.9rem", color: "#334155", maxWidth: "250px", textAlign: "left" }}>
-                        Measures the ratio of patients maintaining healthy form and schedule.
-                      </p>
-                  </div>
-                  <span className="metric-value" style={{ color: "#0284C7", fontSize: "3.5rem" }}>
-                    {metrics.engagementScore}%
-                  </span>
-                </div>
-
-              </div>
-            </section>
-
-            {/* RECENT PATIENTS */}
-            <section className="recent-section">
-              <div className="card table-card">
-                <div className="table-header-row">
-                  <h3 style={{ fontSize: "1.1rem", fontWeight: "700", color: "#0F2A44", margin: 0 }}>Recent Patients</h3>
-                  <button className="view-all-btn" onClick={() => navigate("/therapist/monitoring")}>
-                    View Full Roster <ChevronRight size={16} />
-                  </button>
-                </div>
-                <table className="patient-table">
-                  <thead><tr><th>PATIENT NAME</th><th>JOINED</th><th>STATUS</th><th>COMPLETION</th></tr></thead>
-                  <tbody>
-                    {loading ? <tr><td colSpan="4" style={{textAlign: "center", padding: "32px"}}>Loading...</td></tr> : 
-                    patients.slice(0, 5).map((p) => (
-                        <tr key={p._id} className="patient-row" onClick={() => navigate(`/therapist/patient-detail/${p._id}`)}>
-                          <td style={{ fontWeight: "600", color: "#0F2A44" }}>{p.name}<div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>{p.email}</div></td>
-                          <td>{p.createdAt}</td>
-                          <td><span className={`status-badge ${getPatientStatus(p).class}`}>{getPatientStatus(p).label}</span></td>
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                              <div style={{ width: "60px", height: "6px", background: "#E2E8F0", borderRadius: "4px" }}>
-                                <div style={{ width: `${p.completionRate}%`, background: "#2FA4A9", height: "100%", borderRadius: "4px" }}></div>
-                              </div>
-                              <span style={{ fontSize: "0.85rem", fontWeight: "600" }}>{p.completionRate}%</span>
-                            </div>
-                          </td>
-                        </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+        {/* METRICS */}
+        <div className="metrics-row">
+            <div className="metric-card"><div className="icon-box blue"><Users size={20}/></div><div><h3>{metrics.totalPatients}</h3><p>Total Patients</p></div></div>
+            <div className="metric-card"><div className="icon-box red"><AlertCircle size={20}/></div><div><h3>{metrics.highRiskCount}</h3><p>High Risk</p></div></div>
+            <div className="metric-card"><div className="icon-box orange"><Activity size={20}/></div><div><h3>{metrics.activeProtocols}</h3><p>Active Protocols</p></div></div>
+            <div className="metric-card"><div className="icon-box green"><TrendingUp size={20}/></div><div><h3>{metrics.avgAdherence}%</h3><p>Avg Adherence</p></div></div>
         </div>
-      </div>
+
+        <div className="middle-section">
+            <div className="card notifications-panel">
+                <div className="card-header"><h4>Notifications</h4><span className="badge">{alerts.length}</span></div>
+                <div className="alert-list">
+                    {alerts.length === 0 ? <p className="empty-state">No new alerts.</p> : alerts.map((alert, i) => (
+                        <div key={i} className={`alert-item ${alert.type}`}>
+                            <div className="dot"></div>
+                            <div className="alert-content"><p>{alert.text}</p><span>{alert.time}</span></div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <div className="card graph-panel">
+                <div className="card-header"><h4>Global Engagement</h4></div>
+                <div className="chart-wrapper-main">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={[{name:'M',val:30},{name:'T',val:50},{name:'W',val:45},{name:'T',val:60},{name:'F',val:metrics.avgAdherence}]}>
+                            <defs>
+                                <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#2FA4A9" stopOpacity={0.3}/>
+                                    <stop offset="95%" stopColor="#2FA4A9" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <Tooltip />
+                            <Area type="monotone" dataKey="val" stroke="#2FA4A9" fillOpacity={1} fill="url(#colorVal)" />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+        </div>
+
+        <div className="recent-section">
+            <div className="section-header"><h4>Recent Active Patients</h4></div>
+            <div className="recent-grid">
+                {patients.length === 0 ? <p>No patients found.</p> : patients.slice(0, 4).map(patient => (
+                    <div key={patient._id} className={`patient-mini-card ${selectedPatient?._id === patient._id ? 'selected' : ''}`} onClick={() => setSelectedPatient(patient)}>
+                        <img src={patient.img} alt={patient.name} />
+                        <div className="pm-info"><h5>{patient.name}</h5><span>{patient.status}</span></div>
+                        <div className="pm-arrow"><ChevronRight size={16}/></div>
+                    </div>
+                ))}
+            </div>
+        </div>
+      </main>
+
+      {/* --- RIGHT PANEL (NOW SHOWS REAL DATA) --- */}
+      <aside className="td-right-panel">
+        <div className="search-box">
+            <Search size={18} className="search-icon"/>
+            <input type="text" placeholder="Search patient..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+        </div>
+
+        {searchTerm && (
+            <div className="search-results-dropdown">
+                {filteredPatients.map(p => (
+                    <div key={p._id} className="search-result-item" onClick={() => { setSelectedPatient(p); setSearchTerm(""); }}>{p.name}</div>
+                ))}
+            </div>
+        )}
+
+        {selectedPatient ? (
+            <div className="profile-detail">
+                <div className="profile-header">
+                    <img src={selectedPatient.img} alt="Profile" className="profile-lg-img"/>
+                    <h3>{selectedPatient.name}</h3>
+                    <p className="email-text">{selectedPatient.email}</p>
+                </div>
+
+                {/* --- THIS SECTION DISPLAYS THE REAL FETCHED DATA --- */}
+                <div className="vitals-grid">
+                    <div className="vital-item">
+                        <span className="label">Age</span>
+                        <span className="val">{selectedPatient.age || "--"}</span>
+                    </div>
+                    <div className="vital-item">
+                        <span className="label">Weight</span>
+                        <span className="val">{selectedPatient.weight || "--"}</span>
+                    </div>
+                    <div className="vital-item">
+                        <span className="label">Blood</span>
+                        <span className="val">{selectedPatient.bloodGroup || "--"}</span>
+                    </div>
+                </div>
+                {/* ------------------------------------------------- */}
+
+                <hr className="divider"/>
+
+                <div className="panel-section">
+                    <h4><Calendar size={16}/> Activity Heatmap</h4>
+                    <div className="calendar-heatmap">
+                        {Array.from({ length: 10 }).map((_, i) => (
+                            <div key={i} className={`cal-box ${selectedPatient.loginHistory[i] ? 'active' : ''}`}></div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="panel-section">
+                    <h4><Activity size={16}/> Accuracy Trend</h4>
+                    <div className="mini-chart-container">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={selectedPatient.accuracyTrend}>
+                                <Line type="monotone" dataKey="val" stroke="#2FA4A9" strokeWidth={3} dot={false} />
+                                <Tooltip />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                    <div className="acc-stat"><span>Avg Accuracy:</span><strong>{selectedPatient.completionRate}%</strong></div>
+                </div>
+
+                <button className="full-profile-btn" onClick={() => navigate(`/therapist/patient-detail/${selectedPatient._id}`)}>
+                    View Full Medical Record
+                </button>
+            </div>
+        ) : (
+            <div className="no-selection"><User size={48} color="#cbd5e1"/><p>Select a patient</p></div>
+        )}
+      </aside>
     </div>
   );
 };
