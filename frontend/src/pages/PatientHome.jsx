@@ -66,6 +66,7 @@ const PatientHome = () => {
         <div className="patient-dashboard-container">
             <section className="left-panel">
                 <div className="hologram-wrapper">
+                    {/* Ensure 'human.png' is in your public folder */}
                     <img src="/human.png" alt="Biometric Scan" className="human-model" />
                     <div className="scan-line"></div>
                     <div className="model-status">

@@ -11,17 +11,17 @@ class RepCounter:
         self.calibration = calibration_data
         self.min_rep_duration = min_rep_duration 
 
-        # Stability buffers for EACH arm independently
+        # Stability buffers for EACH side independently
         self.angle_history = {
             'RIGHT': deque(maxlen=8),
             'LEFT': deque(maxlen=8)
         }
 
-        # --- NEW STABILITY LOGIC: Prevents rapid color flickering ---
+        # Stability Logic
         self.color_lock_until = {'RIGHT': 0, 'LEFT': 0}
-        self.color_hold_duration = 1.5 # Seconds to hold a color (e.g. Green) stable
+        self.color_hold_duration = 1.5 
 
-        # State confirmation variables - INDEPENDENT
+        # State confirmation variables
         self.state_hold_time = 0.1 
         self.pending_state = {'RIGHT': None, 'LEFT': None}
         self.pending_state_start = {'RIGHT': 0, 'LEFT': 0}
@@ -29,14 +29,14 @@ class RepCounter:
         self.rep_start_time = {'RIGHT': 0, 'LEFT': 0}
         self.last_rep_time = {'RIGHT': 0, 'LEFT': 0}
         
-        # LOGIC FIX: Ensure full Range of Motion (Must go DOWN before counting UP->DOWN)
+        # Ensure full Range of Motion
         self.ready_to_count = {'RIGHT': False, 'LEFT': False}
         
-        # TRACKING PEAKS FOR ACCURACY
+        # Tracking peaks
         self.rep_min_angle = {'RIGHT': 180, 'LEFT': 180}
         self.rep_max_angle = {'RIGHT': 0, 'LEFT': 0}
         
-        # Compliments - USER CENTERED
+        # Compliments
         self.compliments = [
             "Perfect Form!", 
             "Great Control!", 
@@ -45,7 +45,6 @@ class RepCounter:
         ]
         self.current_compliment = {'RIGHT': "Maintain Form", 'LEFT': "Maintain Form"}
         
-        # Track last feedback to avoid spam
         self.last_feedback = {'RIGHT': "", 'LEFT': ""}
         self.feedback_cooldown = {'RIGHT': 0, 'LEFT': 0}
 
@@ -62,11 +61,11 @@ class RepCounter:
         return min(100, int(accuracy))
 
     def process_rep(self, arm, angle, metrics, current_time, history):
-        """Process rep counting for a single arm independently"""
+        """Process rep counting for a single side independently"""
         metrics.angle = angle
         self.angle_history[arm].append(angle)
 
-        # Track peaks during the current rep for accuracy calculation
+        # Track peaks
         self.rep_min_angle[arm] = min(self.rep_min_angle[arm], angle)
         self.rep_max_angle[arm] = max(self.rep_max_angle[arm], angle)
 
@@ -97,13 +96,11 @@ class RepCounter:
         if metrics.stage == ArmStage.UP.value:
             metrics.curr_rep_time = current_time - self.rep_start_time[arm]
 
-        # --- 3. STABILIZED FEEDBACK GENERATION ---
+        # --- 3. FEEDBACK GENERATION ---
         self._provide_user_centered_feedback(arm, angle, metrics, current_time)
 
     def _determine_target_state(self, angle, contracted, extended, current_stage):
-        """Determines state with dynamic buffer for easier rep counting"""
-        # Dynamic buffer: 15% of ROM, clamped between 5 and 15 degrees
-        # This prevents 'stuck' states for users with limited mobility
+        """Determines state with dynamic buffer"""
         rom = abs(extended - contracted)
         buffer = max(5, min(15, int(rom * 0.15)))
         
@@ -115,7 +112,7 @@ class RepCounter:
         elif angle >= down_limit:
             return ArmStage.DOWN.value
         
-        # Hysteresis Transitions (prevents flickering)
+        # Hysteresis Transitions
         if current_stage == ArmStage.UP.value:
             return ArmStage.UP.value if angle < (up_limit + 5) else ArmStage.MOVING_DOWN.value
         elif current_stage == ArmStage.DOWN.value:
@@ -131,73 +128,62 @@ class RepCounter:
         """Handle state transitions and rep counting"""
         metrics.stage = new_stage
         
-        # 1. RESET / READY AT BOTTOM (DOWN)
-        # We only mark the arm "ready" to count a rep if it hits the bottom (extension).
-        # This prevents starting halfway or spamming reps at the top.
+        # 1. RESET / READY AT EXTENSION (DOWN)
+        # For Squats: Standing up (Angle ~180). For Biceps: Arms down (Angle ~180).
         if new_stage == ArmStage.DOWN.value:
             self.ready_to_count[arm] = True
             self.rep_start_time[arm] = current_time
-            # Reset accuracy peaks for the upcoming rep
             self.rep_min_angle[arm], self.rep_max_angle[arm] = 180, 0
             
-        # 2. DETECT REP COMPLETION (Moving from UP -> DOWN/MOVING_DOWN)
+        # 2. DETECT REP COMPLETION (Moving from CONTRACTION -> EXTENSION)
+        # For Squats: Coming up from bottom. For Biceps: Lowering weight.
         elif prev_stage == ArmStage.UP.value and new_stage in [ArmStage.MOVING_DOWN.value, ArmStage.DOWN.value]:
             
-            # CRITICAL CHECK: Did we come from a valid start position?
             if self.ready_to_count[arm]:
                 rep_duration = current_time - self.rep_start_time[arm]
                 
-                # Validate rep duration
                 if rep_duration >= self.min_rep_duration:
                     metrics.rep_count += 1
                     metrics.rep_time = rep_duration
-                    
-                    # Calculate accuracy for this completed rep
                     metrics.accuracy = self._calculate_rep_accuracy(arm)
                     
                     self.last_rep_time[arm] = current_time
-                    
-                    # Select random compliment
                     self.current_compliment[arm] = random.choice(self.compliments)
-                    
-                    # Lock the success color for stability
                     self.color_lock_until[arm] = current_time + self.color_hold_duration
-                    
-                    # CONSUME THE FLAG: User must go down to DOWN state to earn next rep
                     self.ready_to_count[arm] = False
 
     def _provide_user_centered_feedback(self, arm, angle, metrics, current_time):
-        """Encouraging feedback with stable UI colors"""
+        """Encouraging feedback with stable UI colors - AGNOSTIC"""
         
-        # 1. PRIORITY: Show compliment after rep (Locked to prevent flickering)
+        # 1. PRIORITY: Show compliment after rep
         if (current_time - self.last_rep_time[arm]) < self.color_hold_duration:
             metrics.feedback = self.current_compliment[arm]
             metrics.feedback_color = "GREEN"
             return
 
-        # 2. Check UI Color Lock: Don't change color if it's currently locked
+        # 2. Check UI Color Lock
         if current_time < self.color_lock_until[arm]:
             return
 
-        # 3. Form Coaching (User-Centered Phrasing)
+        # 3. Form Coaching (Generic Phrasing)
         new_feedback = ""
+        # Low angle (Full contraction/squeeze)
         if angle < 10.0:
-            new_feedback = "Relax your grip slightly"
+            new_feedback = "Ease off slightly" # Generic: works for tight grip or deep squat
             metrics.feedback_color = "YELLOW"
+        # High angle (Full extension)
         elif angle > 170.0:
-            new_feedback = "Focus on a full extension"
+            new_feedback = "Good extension" # Generic: works for Standing or Straight Arm
             metrics.feedback_color = "GREEN"
         else:
             new_feedback = "Smooth movements"
             metrics.feedback_color = "GREEN"
             
-        # Error states only for tracking loss
         if metrics.stage == ArmStage.LOST.value:
             new_feedback = "Adjust your position"
             metrics.feedback_color = "RED"
-            self.color_lock_until[arm] = current_time + 2.0 # Lock error color slightly longer
+            self.color_lock_until[arm] = current_time + 2.0
         
-        # Only update if feedback changed (reduces TTS spam)
         if new_feedback != self.last_feedback[arm]:
             metrics.feedback = new_feedback
             self.last_feedback[arm] = new_feedback
@@ -205,7 +191,7 @@ class RepCounter:
             metrics.feedback = new_feedback
 
     def reset_arm(self, arm):
-        """Reset tracking for specific arm"""
+        """Reset tracking for specific side"""
         self.angle_history[arm].clear()
         self.pending_state[arm] = None
         self.rep_start_time[arm] = 0

@@ -1,75 +1,66 @@
 # workout_session.py
 """
-Main workout session manager - OPTIMIZED FOR USER-CENTERED DESIGN & ACCURACY
-With Exercise Verification (Visual + Audio Warning)
+Main workout session manager - OPTIMIZED FOR SQUATS AND LEG EXERCISES
 """
 import cv2
 import mediapipe as mp
 import numpy as np
-import sys
 import time
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional
 from collections import deque
 
-# --- DEBUG / SAFETY CHECK ---
-# This block ensures you aren't shadowing the library with a local file
 if not hasattr(mp, 'solutions'):
-    print(f"\n❌ FATAL ERROR: MediaPipe is not loaded correctly.")
-    print(f"   Python loaded it from: {mp.__file__}")
-    print("   Please DELETE or RENAME any file named 'mediapipe.py' in your project folder.\n")
-    raise ImportError("Module 'mediapipe' has no attribute 'solutions' (likely shadowed by local file).")
+    raise ImportError("Module 'mediapipe' has no attribute 'solutions'.")
 
-# --- CORRECTED IMPORT ---
 mp_pose_lm = mp.solutions.holistic.PoseLandmark
-# ------------------------
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+mp_holistic = mp.solutions.holistic
 
 from models import ArmMetrics, CalibrationData, SessionHistory, GhostPose, Landmark2D 
 from ai_engine import AIEngine
 from exercise_verifier import ExerciseVerifier
 
-# Initialize MediaPipe Drawing Utils
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
-mp_holistic = mp.solutions.holistic
-
 class WorkoutSession:
-    """Manages entire workout session state with optimized performance and clean visuals"""
-    
     def __init__(self, exercise_name: str = "Bicep Curl"):
         from constants import (WorkoutPhase, WORKOUT_COUNTDOWN_TIME,
                                CALIBRATION_HOLD_TIME, SMOOTHING_WINDOW, 
                                SAFETY_MARGIN, MIN_REP_DURATION, 
-                               EXERCISE_PRESETS) 
-        
+                               EXERCISE_PRESETS, ExerciseJoint) 
         from angle_calculator import AngleCalculator
         from pose_processor import PoseProcessor
         from calibration import CalibrationManager
         from rep_counter import RepCounter
         
-        # Load the configuration for the selected exercise
-        self.exercise_config = EXERCISE_PRESETS.get(exercise_name, EXERCISE_PRESETS["Bicep Curl"])
-        
+        # --- ROBUST EXERCISE LOOKUP ---
+        # 1. Try exact match
+        # 2. Try stripping 's' (Squats -> Squat)
+        # 3. Default to Bicep Curl
+        config = EXERCISE_PRESETS.get(exercise_name)
+        if not config:
+            config = EXERCISE_PRESETS.get(exercise_name.rstrip('s'))
+        if not config:
+            print(f"⚠️ Exercise '{exercise_name}' not found. Defaulting to Bicep Curl.")
+            config = EXERCISE_PRESETS["Bicep Curl"]
+            
+        self.exercise_config = config
+        print(f"✅ Session Initialized for: {self.exercise_config.name} (Tracking: {self.exercise_config.joint_to_track.name})")
+
         self.phase = WorkoutPhase.INACTIVE
         self.start_time = 0.0
         self.countdown_remaining = 0
         self.countdown_time = WORKOUT_COUNTDOWN_TIME
         
-        # --- UI & VISUAL STATE ---
-        self.show_ghost = False # DEFAULT: Show CV Dots first
+        self.show_ghost = False 
         self.ghost_visible = True
         
-        self.arm_metrics = {
-            'RIGHT': ArmMetrics(), 
-            'LEFT': ArmMetrics() 
-        }
-        
+        self.arm_metrics = {'RIGHT': ArmMetrics(), 'LEFT': ArmMetrics()}
         self.landmark_buffer = deque(maxlen=2)
         self.color_buffer = deque(maxlen=2)
         
-        # Initialize internal components
         angle_calc = AngleCalculator(SMOOTHING_WINDOW)
         self.pose_processor = PoseProcessor(angle_calc, self.exercise_config)
-        self.verifier = ExerciseVerifier() # Initialize the Verifier
+        self.verifier = ExerciseVerifier() 
         
         self.calibration_data = CalibrationData()
         self.calibration_manager = CalibrationManager(
@@ -79,29 +70,25 @@ class WorkoutSession:
             SAFETY_MARGIN
         )
         
-        # RepCounter handles new accuracy and stabilization logic
         self.rep_counter = RepCounter(self.calibration_data, MIN_REP_DURATION)
         self.history = SessionHistory()
         
-        # MediaPipe Settings
         self.holistic_model = None
         self.cap = None
         self.min_detection_conf = 0.5 
         self.min_tracking_conf = 0.5 
 
-        # AI & Feedback State
         self.last_ai_check = 0
         self.ai_interval = 0.2  
         self.ai_latched_state = {'RIGHT': False, 'LEFT': False}
         self.listening_mode = False 
         self.last_feedback_text = {'RIGHT': "", 'LEFT': ""}
         
-        # Wrong Exercise Detection State
         self.wrong_exercise_counter = 0
         self.wrong_exercise_detected = False
         self.wrong_exercise_reason = ""
 
-        # Ghost Skeleton Connections
+        # GHOST CONNECTIONS (Legs Included)
         self.ghost_connections = [
             (mp_pose_lm.RIGHT_SHOULDER.value, mp_pose_lm.RIGHT_ELBOW.value), 
             (mp_pose_lm.RIGHT_ELBOW.value, mp_pose_lm.RIGHT_WRIST.value),
@@ -112,26 +99,21 @@ class WorkoutSession:
             (mp_pose_lm.LEFT_SHOULDER.value, mp_pose_lm.LEFT_HIP.value),
             (mp_pose_lm.RIGHT_HIP.value, mp_pose_lm.LEFT_HIP.value), 
             (mp_pose_lm.RIGHT_HIP.value, mp_pose_lm.RIGHT_KNEE.value), 
-            (mp_pose_lm.RIGHT_KNEE.value, mp_pose_lm.RIGHT_ANKLE.value),
+            (mp_pose_lm.RIGHT_KNEE.value, mp_pose_lm.RIGHT_ANKLE.value), 
             (mp_pose_lm.LEFT_HIP.value, mp_pose_lm.LEFT_KNEE.value), 
-            (mp_pose_lm.LEFT_KNEE.value, mp_pose_lm.LEFT_ANKLE.value),
+            (mp_pose_lm.LEFT_KNEE.value, mp_pose_lm.LEFT_ANKLE.value),   
             (mp_pose_lm.NOSE.value, mp_pose_lm.RIGHT_SHOULDER.value),
             (mp_pose_lm.NOSE.value, mp_pose_lm.LEFT_SHOULDER.value),
         ]
         self.ghost_pose = GhostPose(instruction="Initializing...", connections=self.ghost_connections)
         
-        # Gesture Stabilization
         self._frames_in_active = 0 
         self.gesture_active_until = 0.0 
         self.gesture_hold_duration = 2.0 
     
     def start(self):
-        """Initializes the session components and starts the camera"""
         from constants import WorkoutPhase
-        
-        for arm in ['RIGHT', 'LEFT']:
-            self.arm_metrics[arm] = ArmMetrics()
-        
+        for arm in ['RIGHT', 'LEFT']: self.arm_metrics[arm] = ArmMetrics()
         self.history.reset()
         self.pose_processor.angle_calculator.reset_buffers()
         self.landmark_buffer.clear()
@@ -143,7 +125,6 @@ class WorkoutSession:
         self._frames_in_active = 0 
         self.gesture_active_until = 0.0
         
-        # Reset verification state
         self.wrong_exercise_counter = 0
         self.wrong_exercise_detected = False
         self.wrong_exercise_reason = ""
@@ -159,12 +140,10 @@ class WorkoutSession:
             model_complexity=0,
             smooth_landmarks=True
         )
-        
         self.calibration_manager.start()
         self.phase = WorkoutPhase.CALIBRATION
     
     def stop(self):
-        """Release camera and model resources"""
         from constants import WorkoutPhase
         if self.cap is not None: self.cap.release()
         if self.holistic_model is not None: self.holistic_model.close()
@@ -172,16 +151,11 @@ class WorkoutSession:
         self.phase = WorkoutPhase.INACTIVE
 
     def process_frame(self) -> Tuple[Optional[np.ndarray], bool]:
-        """Main processing loop optimized for clean visuals"""
         from constants import WorkoutPhase
-        
-        if self.cap is None or not self.cap.isOpened(): 
-            return None, False
-        
+        if self.cap is None or not self.cap.isOpened(): return None, False
         success, image = self.cap.read()
         if not success: return None, False
-        
-        image = cv2.flip(image, 1) # Mirror view for comfort
+        image = cv2.flip(image, 1) 
 
         image.flags.writeable = False
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -191,7 +165,6 @@ class WorkoutSession:
         
         current_time = time.time()
         
-        # --- GESTURE DETECTION ---
         raw_gesture_detected = self.pose_processor.detect_v_sign(results)
         if raw_gesture_detected:
             self.gesture_active_until = current_time + self.gesture_hold_duration
@@ -199,7 +172,6 @@ class WorkoutSession:
         else:
             self.gesture_detected = (current_time < self.gesture_active_until)
 
-        # --- PHASE LOGIC ---
         if self.phase == WorkoutPhase.CALIBRATION:
             self._process_calibration(results, current_time)
         elif self.phase == WorkoutPhase.COUNTDOWN:
@@ -211,40 +183,24 @@ class WorkoutSession:
             else:
                 self._process_workout(results, current_time)
 
-        # --- CLEAN RENDERING ---
         self._draw_overlay(image, results) 
-        
         return image, True
 
     def _draw_overlay(self, image: np.ndarray, results=None):
-        """Draws clean overlay, including the new red warning box for wrong exercises"""
         h, w, _ = image.shape
-
-        # --- WRONG EXERCISE WARNING (VISUAL) ---
         if self.wrong_exercise_detected and results and results.pose_landmarks:
             landmarks = results.pose_landmarks.landmark
             x_coords = [lm.x for lm in landmarks]
             y_coords = [lm.y for lm in landmarks]
-            
-            # Calculate bounding box
             x_min, x_max = int(min(x_coords) * w), int(max(x_coords) * w)
             y_min, y_max = int(min(y_coords) * h), int(max(y_coords) * h)
-            
-            # Add padding
             pad = 20
             x_min, x_max = max(0, x_min - pad), min(w, x_max + pad)
             y_min, y_max = max(0, y_min - pad), min(h, y_max + pad)
-            
-            # Draw Red Box
             cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 0, 255), 5)
-            
-            # Draw Warning Text background
             cv2.rectangle(image, (x_min, y_min - 40), (x_max, y_min), (0, 0, 255), -1)
             cv2.putText(image, f"WARNING: {self.wrong_exercise_reason.upper()}", 
-                        (x_min + 5, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                        0.7, (255, 255, 255), 2)
-            
-            # DON'T DRAW GHOST IF WRONG EXERCISE DETECTED
+                        (x_min + 5, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             return
 
         if self.show_ghost:
@@ -260,74 +216,50 @@ class WorkoutSession:
                     cv2.circle(image, p2_px, 5, ghost_color, -1)
         else:
             if results and results.pose_landmarks:
-                mp_drawing.draw_landmarks(
-                    image,
-                    results.pose_landmarks,
-                    mp_holistic.POSE_CONNECTIONS,
-                    landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-                )
+                mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS, mp_drawing_styles.get_default_pose_landmarks_style())
 
     def _process_workout(self, results, current_time: float):
-        """Handles workout logic, accuracy, form feedback, and exercise verification"""
         from constants import ArmStage 
-        
         if not results.pose_landmarks:
             self.ghost_pose.instruction = "Please step into view"
             return
         
         landmarks = results.pose_landmarks.landmark
-
-        # --- EXERCISE VERIFICATION ---
-        # Check if user is doing the wrong exercise
         is_wrong, reason = self.verifier.check_mismatch(landmarks, self.exercise_config.name)
         
-        if is_wrong:
-            self.wrong_exercise_counter += 1
-        else:
-            # Decay counter quickly if they correct themselves
-            self.wrong_exercise_counter = max(0, self.wrong_exercise_counter - 2)
+        if is_wrong: self.wrong_exercise_counter += 1
+        else: self.wrong_exercise_counter = max(0, self.wrong_exercise_counter - 2)
         
-        # Trigger warning faster: 10 frames (~0.3s)
         if self.wrong_exercise_counter > 10:
             self.wrong_exercise_detected = True
             self.wrong_exercise_reason = reason
         else:
             self.wrong_exercise_detected = False
 
-        # --- CRITICAL: BLOCK REPS & FORCE SPEECH IF WRONG EXERCISE ---
         if self.wrong_exercise_detected:
             warning_msg = f"Stop! {self.wrong_exercise_reason}"
-            
-            # Update Feedback for Speech/TTS
-            # This forces the frontend to read out "Stop! Squat Detected" etc.
             self.arm_metrics['RIGHT'].feedback = warning_msg
             self.arm_metrics['LEFT'].feedback = warning_msg
             self.arm_metrics['RIGHT'].feedback_color = "RED"
             self.arm_metrics['LEFT'].feedback_color = "RED"
-            
-            # We skip Rep Counting entirely
             return 
 
-        # --- NORMAL PROCESSING ---
         if (current_time - self.last_ai_check) > self.ai_interval:
             self.last_ai_check = current_time
             self._update_ai_latch(results)
 
         angles = self.pose_processor.get_both_arm_angles(results)
-        
         for arm in ['RIGHT', 'LEFT']:
             if angles[arm] is not None:
                 self.arm_metrics[arm].angle = angles[arm]
-                # RepCounter now updates accuracy internally per rep
                 self.rep_counter.process_rep(arm, angles[arm], self.arm_metrics[arm], current_time, self.history)
                 
-                # Dynamic Feedback Color Logic
                 if self.arm_metrics[arm].feedback:
                     self.arm_metrics[arm].feedback_color = "RED"
-                elif self.arm_metrics[arm].stage in [ArmStage.UP.value, ArmStage.DOWN.value]:
-                     self.arm_metrics[arm].feedback_color = "GREEN"
-                elif self.arm_metrics[arm].stage in [ArmStage.MOVING_UP.value, ArmStage.MOVING_DOWN.value]:
-                    self.arm_metrics[arm].feedback_color = "YELLOW"
+                    if self.arm_metrics[arm].feedback in ["Good extension", "Smooth movements", "Perfect Form!", "Great Control!"]:
+                        self.arm_metrics[arm].feedback_color = "GREEN"
+                    if "Ease off" in self.arm_metrics[arm].feedback:
+                        self.arm_metrics[arm].feedback_color = "YELLOW"
 
         if results.pose_landmarks:
              self._calculate_ideal_pose_realtime(results.pose_landmarks.landmark)
@@ -337,9 +269,7 @@ class WorkoutSession:
         self.history.left_angle.append(angles['LEFT'] or 0)
 
     def _calculate_ideal_pose_realtime(self, reference_landmarks) -> None:
-        """Calculates Inverse Kinematics for the ghost skeleton"""
         from constants import ArmStage, ExerciseJoint
-        
         if not self.show_ghost: return
 
         metrics = self.arm_metrics['RIGHT']
@@ -357,46 +287,50 @@ class WorkoutSession:
                         if target_stage == ArmStage.UP.value 
                         else self.calibration_manager.data.extended_threshold)
 
-        # Inverse Kinematics Logic for Right Arm
+        is_bending_joint = self.exercise_config.joint_to_track in [ExerciseJoint.ELBOW, ExerciseJoint.KNEE]
+        rotation_angle = np.pi - np.radians(target_angle) if is_bending_joint else np.radians(target_angle)
+
         if all(lm in target_landmarks_2d for lm in [R_A, R_B, R_C]):
             P_A = np.array([target_landmarks_2d[R_A].x, target_landmarks_2d[R_A].y])
             P_B = np.array([target_landmarks_2d[R_B].x, target_landmarks_2d[R_B].y])
             orig_len_BC = np.hypot(reference_landmarks[R_C].x - reference_landmarks[R_B].x, reference_landmarks[R_C].y - reference_landmarks[R_B].y)
             V_BA = P_A - P_B 
             angle_BA = np.arctan2(V_BA[1], V_BA[0])
-            rotation_angle = np.pi - np.radians(target_angle) if self.exercise_config.joint_to_track in [ExerciseJoint.ELBOW, ExerciseJoint.KNEE] else np.radians(target_angle)
             final_angle = angle_BA + rotation_angle if target_landmarks_2d[R_A].x > target_landmarks_2d[L_A].x else angle_BA - rotation_angle 
             target_landmarks_2d[R_C] = Landmark2D(x=P_B[0] + orig_len_BC * np.cos(final_angle), y=P_B[1] + orig_len_BC * np.sin(final_angle))
 
-        # Inverse Kinematics Logic for Left Arm
         if all(lm in target_landmarks_2d for lm in [L_A, L_B, L_C]):
             P_A_L = np.array([target_landmarks_2d[L_A].x, target_landmarks_2d[L_A].y])
             P_B_L = np.array([target_landmarks_2d[L_B].x, target_landmarks_2d[L_B].y])
             orig_len_BC_L = np.hypot(reference_landmarks[L_C].x - reference_landmarks[L_B].x, reference_landmarks[L_C].y - reference_landmarks[L_B].y)
             V_BA_L = P_A_L - P_B_L
             angle_BA_L = np.arctan2(V_BA_L[1], V_BA_L[0])
-            rotation_angle = np.pi - np.radians(target_angle) if self.exercise_config.joint_to_track in [ExerciseJoint.ELBOW, ExerciseJoint.KNEE] else np.radians(target_angle)
             final_angle_L = angle_BA_L - rotation_angle if target_landmarks_2d[R_A].x > target_landmarks_2d[L_A].x else angle_BA_L + rotation_angle 
             target_landmarks_2d[L_C] = Landmark2D(x=P_B_L[0] + orig_len_BC_L * np.cos(final_angle_L), y=P_B_L[1] + orig_len_BC_L * np.sin(final_angle_L))
 
         self.ghost_pose.landmarks = target_landmarks_2d
         self.ghost_pose.color = self._quick_color_smooth(metrics.feedback_color)
-        self.ghost_pose.instruction = metrics.feedback.replace("AI: ", "") if metrics.feedback else "Maintain Form"
+        
+        instr = metrics.feedback.replace("AI: ", "") if metrics.feedback else "Maintain Form"
+        if self.exercise_config.joint_to_track == ExerciseJoint.KNEE:
+            instr = instr.replace("arm", "leg").replace("elbow", "knee")
+        self.ghost_pose.instruction = instr
 
     def _process_calibration(self, results, current_time: float):
-        """Silenced word repetition calibration logic"""
-        from constants import WorkoutPhase
+        from constants import WorkoutPhase, ExerciseJoint
         complete = self.calibration_manager.process_frame(results, current_time)
         if complete:
             self.phase = WorkoutPhase.COUNTDOWN
             self.start_time = current_time
             
         if results.pose_landmarks:
-             self.ghost_pose.instruction = self.calibration_manager.data.message
+             msg = self.calibration_manager.data.message
+             if self.exercise_config.joint_to_track in [ExerciseJoint.KNEE, ExerciseJoint.HIP]:
+                 msg = msg.replace("arm", "leg").replace("elbow", "knee").replace("Shoulder", "Hips")
+             self.ghost_pose.instruction = msg
              self.ghost_pose.color = "GRAY"
 
     def _process_countdown(self, current_time: float):
-        """Phase transition countdown"""
         from constants import WorkoutPhase
         elapsed = current_time - self.start_time
         if elapsed >= self.countdown_time:
@@ -408,7 +342,6 @@ class WorkoutSession:
             self.ghost_pose.color = "YELLOW"
 
     def _update_ai_latch(self, results):
-        """ML-based form quality prediction"""
         feature_indices = self.exercise_config.ai_features_landmarks
         if not results.pose_landmarks: return
         try:
@@ -421,7 +354,6 @@ class WorkoutSession:
         except Exception: pass
 
     def get_state_dict(self) -> dict:
-        """Returns full session state including Rep Accuracy"""
         return {
             'exercise_name': self.exercise_config.name,
             'tracked_joint_name': self.exercise_config.joint_to_track.value.title(),
@@ -444,7 +376,6 @@ class WorkoutSession:
         }
     
     def get_final_report(self) -> dict:
-        """Final summary report for session review"""
         return {
             'exercise_name': self.exercise_config.name, 
             'duration': round(self.history.time[-1] if self.history.time else 0, 2),
