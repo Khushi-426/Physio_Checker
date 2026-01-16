@@ -20,7 +20,6 @@ const THEME = {
 const API_BASE_FLASK = "http://127.0.0.1:5001"; 
 
 // --- HELPER: Prevent NaN Crash ---
-// This ensures that even if data is missing or malformed, we render '0' instead of crashing
 const safeDisplay = (val) => {
     const num = Number(val);
     if (isNaN(num)) return 0;
@@ -38,7 +37,7 @@ const TherapistPatientDetail = () => {
   useEffect(() => {
     const fetchData = async () => {
         try {
-            // 1. Fetch Basic Profile & Status
+            // 1. Fetch Basic Profile & Status (Now includes age, weight, bloodGroup)
             const profileRes = await fetch(`${API_BASE_FLASK}/api/therapist/patients`);
             const profileData = await profileRes.json();
             const user = profileData.patients.find(p => p.email === email);
@@ -88,16 +87,14 @@ const TherapistPatientDetail = () => {
   const accuracyTrend = analytics?.accuracy_trend || [];
   const adherenceData = [60, 75, 80, 90, 85]; 
   
-  // Safe Fallback for Consistency Score
   let consistencyScore = analytics?.consistency_score || (accuracyTrend.length > 0 ? 88 : 0);
-  if (isNaN(Number(consistencyScore))) consistencyScore = 0; // Strict NaN Check
+  if (isNaN(Number(consistencyScore))) consistencyScore = 0; 
 
   const recentSessions = analytics?.history ? analytics.history.slice(-5).reverse() : [];
   
   const riskColor = patientProfile.status === "High Risk" ? THEME.danger : 
                     patientProfile.status === "Alert" ? THEME.warning : THEME.success;
 
-  // Calculate Totals Safely
   const totalErrors = analytics?.history?.reduce((acc, sess) => acc + safeDisplay(sess.total_errors), 0) || 0;
   const totalReps = analytics?.history?.reduce((acc, sess) => acc + safeDisplay(sess.total_reps), 0) || 0;
 
@@ -130,11 +127,6 @@ const TherapistPatientDetail = () => {
                 {patientProfile.email}
             </span>
         </div>
-        <div>
-            <button style={{ padding: "8px 16px", borderRadius: "8px", background: THEME.primary, color: "white", border: "none", fontSize: "0.85rem", fontWeight: "600", boxShadow: "0 2px 4px rgba(59, 130, 246, 0.3)" }}>
-                Edit Protocol
-            </button>
-        </div>
       </div>
 
       <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "32px 24px" }}>
@@ -142,7 +134,7 @@ const TherapistPatientDetail = () => {
         {/* 2. ANALYTICS HERO */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr 1fr", gap: "24px", marginBottom: "32px" }}>
             
-            {/* ZONE 1: Identity & Status */}
+            {/* ZONE 1: Identity & Status + NEW MEDICAL DETAILS */}
             <div style={{ background: THEME.surface, borderRadius: "16px", padding: "24px", border: `1px solid ${THEME.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
                     <div style={{ 
@@ -158,6 +150,22 @@ const TherapistPatientDetail = () => {
                     <div>
                         <h2 style={{ margin: 0, fontSize: "1.25rem", color: THEME.textMain }}>{patientProfile.name}</h2>
                         <div style={{ color: THEME.secondary, fontSize: "0.9rem", marginTop: "4px" }}>Week 4 Recovery • ACL Rehab</div>
+                    </div>
+                </div>
+
+                {/* --- NEW MEDICAL BIO SECTION --- */}
+                <div style={{ marginTop: "20px", display: "flex", justifyContent: "space-between", gap: "10px" }}>
+                    <div style={bioBoxStyle}>
+                        <span style={bioLabelStyle}>Age</span>
+                        <span style={bioValueStyle}>{patientProfile.age}</span>
+                    </div>
+                    <div style={bioBoxStyle}>
+                        <span style={bioLabelStyle}>Weight</span>
+                        <span style={bioValueStyle}>{patientProfile.weight} kg</span>
+                    </div>
+                    <div style={bioBoxStyle}>
+                        <span style={bioLabelStyle}>Blood</span>
+                        <span style={bioValueStyle}>{patientProfile.bloodGroup}</span>
                     </div>
                 </div>
                 
@@ -185,7 +193,6 @@ const TherapistPatientDetail = () => {
                     <div>
                         <div style={{ fontSize: "0.85rem", color: THEME.secondary, fontWeight: "600" }}>Accuracy Trend</div>
                         <div style={{ fontSize: "1.5rem", fontWeight: "700", color: THEME.textMain }}>
-                             {/* Safe display for accuracy trend text */}
                              {accuracyTrend.length > 0 ? `${safeDisplay(accuracyTrend[accuracyTrend.length-1])}%` : "N/A"}
                         </div>
                     </div>
@@ -218,7 +225,6 @@ const TherapistPatientDetail = () => {
                     <div style={{ fontSize: "0.75rem", color: "#1E40AF", fontWeight: "600", marginBottom: "4px" }}>ACTIVE PROTOCOL</div>
                     <div style={{ color: "#1E3A8A", fontWeight: "700", fontSize: "0.95rem" }}>Rotator Cuff Strenghening B</div>
                     <div style={{ fontSize: "0.8rem", color: "#3B82F6", marginTop: "8px" }}>
-                        {/* Safe display for total sessions */}
                         Session {safeDisplay(analytics?.total_sessions)} of 24
                     </div>
                 </div>
@@ -285,7 +291,6 @@ const TherapistPatientDetail = () => {
 
                                 <div style={{ flex: 1 }}>
                                     <div style={{ fontSize: "0.95rem", color: THEME.textMain, fontWeight: "600" }}>{session.exercise || "Unknown Exercise"}</div>
-                                    {/* --- FIX: WRAP THESE VALUES IN safeDisplay --- */}
                                     <div style={{ fontSize: "0.8rem", color: THEME.secondary }}>
                                         {safeDisplay(session.total_reps)} Reps • {safeDisplay(session.total_errors)} Corrections
                                     </div>
@@ -293,7 +298,6 @@ const TherapistPatientDetail = () => {
 
                                 <div style={{ textAlign: "right" }}>
                                     {(() => {
-                                        // SAFE ACCURACY CALCULATION
                                         const r = safeDisplay(session.total_reps);
                                         const e = safeDisplay(session.total_errors);
                                         const acc = r > 0 ? Math.max(0, 100 - Math.round((e / r) * 20)) : 0;
@@ -318,6 +322,29 @@ const TherapistPatientDetail = () => {
       </div>
     </div>
   );
+};
+
+// --- STYLES FOR BIO BOXES ---
+const bioBoxStyle = {
+    flex: 1, 
+    background: "#F8FAFC", 
+    padding: "8px", 
+    borderRadius: "8px", 
+    textAlign: "center"
+};
+
+const bioLabelStyle = {
+    display: "block", 
+    fontSize: "0.7rem", 
+    color: "#64748B", 
+    textTransform: "uppercase"
+};
+
+const bioValueStyle = {
+    display: "block", 
+    fontSize: "0.95rem", 
+    fontWeight: "700", 
+    color: "#0F172A"
 };
 
 export default TherapistPatientDetail;

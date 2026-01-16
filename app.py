@@ -291,21 +291,19 @@ def handle_stop_session(data):
             duration = last_session_report.get("duration", 0) # Duration in seconds
 
             # Calculate Accuracy logic (Simple: 100 - penalty per error)
-            # OR usage of new internal accuracy metric if available
             base_accuracy = 100
             if total_reps > 0:
-                penalty = (total_errors / total_reps) * 15 # 15% penalty per error per rep avg
+                penalty = (total_errors / total_reps) * 15 
                 base_accuracy = max(0, 100 - penalty)
             elif duration > 10:
-                # If they exercised but did 0 reps, low accuracy
                 base_accuracy = 50
             
-            # Save to MongoDB with structure matching frontend expectations
+            # Save to MongoDB
             session_doc = {
                 "email": email,
-                "exerciseType": exercise, # Frontend expects 'exerciseType'
+                "exerciseType": exercise, 
                 "timestamp": time.time(),
-                "performedAt": datetime.now(), # Store as Date object for queries
+                "performedAt": datetime.now(), 
                 "date_str": datetime.now().strftime("%Y-%m-%d"),
                 "duration": duration,
                 "reps": total_reps,
@@ -339,26 +337,79 @@ def handle_toggle_listening(data):
 # 6. API ROUTES
 # ----------------------------------------------------
 
-# --- NEW: Session History Route for Dashboard ---
-@app.route("/api/sessions/my-history", methods=["GET", "OPTIONS"])
-def get_session_history():
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
+# --- NEW: User Profile Management Routes ---
 
-    # Get email from Query Param (Easiest way given your auth setup)
-    email = request.args.get("email")
+@app.route("/api/user/profile/get", methods=["POST"])
+def get_user_profile():
+    """Fetches user profile details like age, weight, blood group."""
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+    
+    if users_collection is None:
+        return jsonify({"error": "Database unavailable"}), 503
+
+    try:
+        user = users_collection.find_one({"email": email}, {"_id": 0, "password": 0, "otp": 0})
+        if user:
+            return jsonify({
+                "name": user.get("name", ""),
+                "email": user.get("email", ""),
+                "age": user.get("age", ""),
+                "weight": user.get("weight", ""),
+                "bloodGroup": user.get("bloodGroup", "")
+            }), 200
+        else:
+            return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        logger.error(f"Fetch Profile Error: {e}")
+        return jsonify({"error": "Internal Error"}), 500
+
+@app.route("/api/user/profile/update", methods=["POST"])
+def update_user_profile():
+    """Updates user profile details."""
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
     
     if not email:
         return jsonify({"error": "Email is required"}), 400
 
-    if sessions_collection is None:
-        return jsonify([]), 200
+    if users_collection is None:
+        return jsonify({"error": "Database unavailable"}), 503
+
+    update_fields = {}
+    if "name" in data: update_fields["name"] = data["name"]
+    if "age" in data: update_fields["age"] = data["age"]
+    if "weight" in data: update_fields["weight"] = data["weight"]
+    if "bloodGroup" in data: update_fields["bloodGroup"] = data["bloodGroup"]
 
     try:
-        # Fetch sessions for this user, newest first
+        result = users_collection.update_one(
+            {"email": email},
+            {"$set": update_fields}
+        )
+        if result.modified_count > 0 or result.matched_count > 0:
+            return jsonify({"status": "success", "message": "Profile updated"}), 200
+        else:
+            return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        logger.error(f"Update Profile Error: {e}")
+        return jsonify({"error": "Internal Error"}), 500
+
+# --- Existing Routes ---
+
+@app.route("/api/sessions/my-history", methods=["GET", "OPTIONS"])
+def get_session_history():
+    if request.method == "OPTIONS": return jsonify({}), 200
+    email = request.args.get("email")
+    if not email: return jsonify({"error": "Email is required"}), 400
+    if sessions_collection is None: return jsonify([]), 200
+
+    try:
         cursor = sessions_collection.find({"email": email}).sort("timestamp", -1)
         sessions = []
-        
         for doc in cursor:
             sessions.append({
                 "_id": str(doc["_id"]),
@@ -366,14 +417,12 @@ def get_session_history():
                 "reps": doc.get("reps", doc.get("total_reps", 0)),
                 "qualityScore": doc.get("qualityScore", 0),
                 "duration": doc.get("duration", 0),
-                "performedAt": doc.get("timestamp", 0) * 1000, # Convert to JS ms
+                "performedAt": doc.get("timestamp", 0) * 1000, 
                 "completed": doc.get("completed", True),
                 "metrics": doc.get("metrics", {})
             })
-            
         return jsonify(sessions), 200
     except Exception as e:
-        logger.error(f"Error fetching history: {e}")
         return jsonify({"error": "Failed to fetch history"}), 500
 
 
@@ -387,8 +436,6 @@ def get_exercises():
         base_list = _get_frontend_exercise_list()
         email = request.args.get('email')
         assigned_titles = []
-        
-        # Only attempt DB operations if connected
         if email and users_collection is not None:
             try:
                 user = users_collection.find_one({"email": email})
@@ -401,18 +448,13 @@ def get_exercises():
                         elif "knee" in ex_name.lower(): assigned_titles.append("Knee Lift")
                         elif "squat" in ex_name.lower(): assigned_titles.append("Squat")
                         elif "row" in ex_name.lower(): assigned_titles.append("Seated Row")
-            except Exception as db_err:
-                print(f"⚠️ DB Fetch Error in Exercises: {db_err}")
+            except Exception as db_err: pass
 
         for ex in base_list:
-            if ex["title"] in assigned_titles:
-                ex["recommended"] = True
-            else:
-                ex["recommended"] = False
-
+            if ex["title"] in assigned_titles: ex["recommended"] = True
+            else: ex["recommended"] = False
         return jsonify(base_list)
     except Exception as e:
-        logger.error(f"Error in get_exercises: {e}")
         return jsonify({"error": "Failed to fetch exercises"}), 500
 
 @app.route("/api/user/analytics_detailed", methods=["POST"])
@@ -420,9 +462,7 @@ def analytics_detailed():
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     if not email: return jsonify({"error": "Email required"}), 400
-
-    if sessions_collection is None:
-        return jsonify({"total_sessions": 0, "history": []})
+    if sessions_collection is None: return jsonify({"total_sessions": 0, "history": []})
 
     sessions = list(sessions_collection.find({"email": email}).sort("timestamp", 1))
     analytics = AIEngine.get_detailed_analytics(sessions)
@@ -433,24 +473,17 @@ def ai_prediction():
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     if not email: return jsonify({"error": "Email required"}), 400
-
-    if sessions_collection is None:
-        return jsonify({"error": "Database unavailable"}), 500
+    if sessions_collection is None: return jsonify({"error": "Database unavailable"}), 500
 
     sessions = list(sessions_collection.find({"email": email}).sort("timestamp", 1))
     prediction = AIEngine.get_recovery_prediction(sessions)
-    if not prediction:
-        return jsonify({"error": "Not enough data"}), 200 
-
+    if not prediction: return jsonify({"error": "Not enough data"}), 200 
     return jsonify(prediction)
 
 @app.route("/api/ai_coach", methods=["POST", "OPTIONS"])
 def ai_coach_commentary():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-        
+    if request.method == 'OPTIONS': return jsonify({}), 200
     data = request.get_json(silent=True) or {}
-    
     if 'listening' in data:
         global workout_session
         if workout_session:
@@ -462,15 +495,13 @@ def ai_coach_commentary():
     query = data.get("query")
     history = data.get("history", [])
 
-    if not context or not query:
-        return jsonify({"error": "Context and query are required"}), 400
+    if not context or not query: return jsonify({"error": "Context and query are required"}), 400
 
     try:
         engine = AIEngine()
         response = engine.generate_commentary(context, query, history)
         return jsonify({"response": response}), 200
     except Exception as e:
-        logger.error(f"AI Coach Error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/toggle_ghost', methods=['POST'])
@@ -486,8 +517,7 @@ def toggle_ghost():
 # ----------------------------------------------------
 @app.route("/api/auth/send-otp", methods=["POST"])
 def send_otp():
-    if users_collection is None:
-        return jsonify({"error": "Database unavailable"}), 503
+    if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     if users_collection.find_one({"email": email}):
@@ -504,13 +534,11 @@ def send_otp():
         mail.send(msg)
         return jsonify({"message": "OTP sent"}), 200
     except Exception as e:
-        logger.error(f"Mail Error: {e}")
         return jsonify({"error": "Failed to send email"}), 500
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
-    if users_collection is None:
-        return jsonify({"error": "Database unavailable"}), 503
+    if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     user = users_collection.find_one({"email": data.get("email")})
     if user and bcrypt.check_password_hash(user["password"], data.get("password")):
@@ -524,8 +552,7 @@ def login():
 
 @app.route("/api/auth/signup-verify", methods=["POST"])
 def signup_verify():
-    if users_collection is None:
-        return jsonify({"error": "Database unavailable"}), 503
+    if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     otp_input = data.get("otp")
@@ -553,13 +580,11 @@ def signup_verify():
 
 @app.route("/api/auth/google", methods=["POST"])
 def google_auth():
-    if users_collection is None:
-        return jsonify({"error": "Database unavailable"}), 503
+    if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     token = data.get("token") 
     role = data.get("role", "patient")
-    if not token:
-        return jsonify({"error": "Google token required"}), 400
+    if not token: return jsonify({"error": "Google token required"}), 400
     try:
         google_response = requests.get(
             f"https://www.googleapis.com/oauth2/v1/userinfo?access_token={token}",
@@ -570,8 +595,7 @@ def google_auth():
         google_user = google_response.json()
         email = google_user.get("email")
         name = google_user.get("name")
-        if not email:
-            return jsonify({"error": "Email not found"}), 400
+        if not email: return jsonify({"error": "Email not found"}), 400
         user = users_collection.find_one({"email": email})
         if user:
             return jsonify({
@@ -595,21 +619,17 @@ def google_auth():
                 "name": name
             }), 200
     except Exception as e:
-        logger.error(f"Google Auth Error: {e}")
         return jsonify({"error": "Internal Server Error"}), 500
 
 @app.route("/api/assign", methods=["POST"])
 def assign_exercise():
-    if protocols_collection is None or users_collection is None:
-        return jsonify({"error": "Database unavailable"}), 503
+    if protocols_collection is None or users_collection is None: return jsonify({"error": "Database unavailable"}), 503
     data = request.get_json(silent=True) or {}
     patient_email = data.get("patientEmail")
     exercise_name = data.get("exerciseName")
-    if not patient_email or not exercise_name:
-        return jsonify({"error": "Missing fields"}), 400
+    if not patient_email or not exercise_name: return jsonify({"error": "Missing fields"}), 400
     patient = users_collection.find_one({"email": patient_email})
-    if not patient:
-        return jsonify({"error": "Patient not found"}), 404
+    if not patient: return jsonify({"error": "Patient not found"}), 404
     therapist = users_collection.find_one({"role": "therapist"})
     therapist_id = therapist["_id"] if therapist else patient["_id"] 
     protocol_doc = {
@@ -632,8 +652,15 @@ def assign_exercise():
 
 @app.route("/api/therapist/patients", methods=["GET"])
 def therapist_patients():
+    """Updated to include profile fields: age, weight, bloodGroup"""
     if users_collection is None: return jsonify({"patients": []}), 200
-    patients = list(users_collection.find({"role": "patient"}, {"_id": 0, "name": 1, "email": 1, "created_at": 1}))
+    
+    # PROJECT FIELDS
+    patients = list(users_collection.find(
+        {"role": "patient"}, 
+        {"_id": 0, "name": 1, "email": 1, "created_at": 1, "age": 1, "weight": 1, "bloodGroup": 1}
+    ))
+    
     enriched = []
     one_day_ago = time.time() - 86400 
     for p in patients:
@@ -650,10 +677,14 @@ def therapist_patients():
             elif accuracy < 80: status = "Alert"
             if last_session_ts and last_session_ts > one_day_ago:
                 recent_activity_type = "Session Completed"
+        
         enriched.append({
             "id": str(p["email"]), 
             "name": p.get("name", "Unknown"),
             "email": p["email"],
+            "age": p.get("age", "--"),
+            "weight": p.get("weight", "--"),
+            "bloodGroup": p.get("bloodGroup", "--"),
             "date_joined": datetime.fromtimestamp(p.get("created_at", time.time())).strftime("%Y-%m-%d"),
             "status": status,
             "last_session_ts": last_session_ts,
@@ -679,8 +710,7 @@ def therapist_notifications():
 
 @app.route("/start_tracking", methods=["POST", "OPTIONS"])
 def start_tracking():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
+    if request.method == 'OPTIONS': return jsonify({}), 200
     data = request.get_json(silent=True) or {}
     exercise = data.get("exercise", "Bicep Curl")
     try:

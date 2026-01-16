@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const auth = require('../middleware/auth'); // <--- ADDED THIS IMPORT
+const auth = require('../middleware/auth'); 
 
 // helper to create JWT
 const createToken = (user) => {
@@ -14,13 +14,10 @@ const createToken = (user) => {
       role: user.role
     }
   };
-
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '5h' });
 };
 
 // ---------------------- GET LOGGED IN USER ----------------------
-// GET /api/auth/user
-// This route is called by the frontend to identify the user from the token
 router.get('/user', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -31,97 +28,107 @@ router.get('/user', auth, async (req, res) => {
   }
 });
 
-// ---------------------- THERAPIST REGISTER ----------------------
-// POST /api/auth/therapist/register
-router.post('/therapist/register', async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Please enter all fields.' });
-  }
+// ---------------------- UPDATE USER PROFILE (NEW) ----------------------
+router.put('/update-profile', auth, async (req, res) => {
+  const { name, age, weight, bloodGroup } = req.body;
 
   try {
-    let existing = await User.findOne({ email });
-    if (existing) {
-      return res.status(400).json({ message: 'User already exists.' });
+    let user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
     }
 
-    const user = new User({
-      email,
-      password,
-      role: 'THERAPIST'
-    });
+    // Update fields if provided
+    if (name) user.name = name;
+    if (age) user.age = age;
+    if (weight) user.weight = weight;
+    if (bloodGroup) user.bloodGroup = bloodGroup;
 
     await user.save();
 
+    // Return the updated user object (excluding password)
+    const updatedUser = await User.findById(req.user.id).select('-password');
+    res.json(updatedUser);
+  } catch (err) {
+    console.error('Profile Update Error:', err);
+    res.status(500).json({ message: 'Server error updating profile.' });
+  }
+});
+
+// ---------------------- THERAPIST REGISTER ----------------------
+router.post('/therapist/register', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ message: 'Please enter all fields.' });
+
+  try {
+    let existing = await User.findOne({ email });
+    if (existing) return res.status(400).json({ message: 'User already exists.' });
+
+    const user = new User({ email, password, role: 'THERAPIST' });
+    await user.save();
     return res.status(201).json({ message: 'Therapist registered successfully.' });
   } catch (err) {
-    console.error('Therapist Registration Error:', err);
-    return res.status(500).json({ message: 'Server error during therapist registration.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Server error' });
   }
 });
 
 // ---------------------- PATIENT REGISTER ------------------------
-// POST /api/auth/patient/register
 router.post('/patient/register', async (req, res) => {
   const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Please enter all fields.' });
-  }
+  if (!email || !password) return res.status(400).json({ message: 'Please enter all fields.' });
 
   try {
     let existing = await User.findOne({ email });
-    if (existing) {
-      return res.status(400).json({ message: 'User already exists.' });
-    }
+    if (existing) return res.status(400).json({ message: 'User already exists.' });
 
-    const user = new User({
-      email,
-      password,
-      role: 'PATIENT'
-    });
-
+    const user = new User({ email, password, role: 'PATIENT' });
     await user.save();
-
     return res.status(201).json({ message: 'Patient registered successfully.' });
   } catch (err) {
-    console.error('Patient Registration Error:', err);
-    return res.status(500).json({ message: 'Server error during patient registration.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Server error' });
   }
 });
 
 // ---------------------- THERAPIST LOGIN -------------------------
-// POST /api/auth/therapist/login
 router.post('/therapist/login', async (req, res) => {
   const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Please enter all fields.' });
-  }
+  if (!email || !password) return res.status(400).json({ message: 'Please enter all fields.' });
 
   try {
     const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid credentials.' });
-    }
-
-    if (user.role !== 'THERAPIST') {
-      return res.status(403).json({ message: 'Access denied: not a therapist account.' });
-    }
+    if (!user || user.role !== 'THERAPIST') return res.status(400).json({ message: 'Invalid credentials.' });
 
     const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials.' });
-    }
+    if (!isMatch) return res.status(400).json({ message: 'Invalid credentials.' });
 
     const token = createToken(user);
     return res.json({ token });
   } catch (err) {
-    console.error('Therapist Login Error:', err);
-    return res.status(500).json({ message: 'Server error during therapist login.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Server error' });
   }
 });
+
+// ---------------------- PATIENT LOGIN (Assuming you need this too) -------------------------
+router.post('/patient/login', async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: 'Please enter all fields.' });
+  
+    try {
+      const user = await User.findOne({ email });
+      if (!user || user.role !== 'PATIENT') return res.status(400).json({ message: 'Invalid credentials.' });
+  
+      const isMatch = await user.comparePassword(password);
+      if (!isMatch) return res.status(400).json({ message: 'Invalid credentials.' });
+  
+      const token = createToken(user);
+      return res.json({ token });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ message: 'Server error' });
+    }
+  });
 
 module.exports = router;
