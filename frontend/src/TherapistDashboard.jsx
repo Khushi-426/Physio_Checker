@@ -4,26 +4,26 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import {
-  LayoutDashboard,
   Users,
-  FileText,
   Search,
   ChevronRight,
-  ChevronLeft,
   LogOut,
   AlertCircle,
-  Calendar,
-  User,
   Activity,
-  TrendingUp
+  TrendingUp,
+  Dumbbell,
+  Clock,
+  PlusCircle,
+  FileText
 } from "lucide-react";
 import {
   LineChart,
   Line,
   Tooltip,
   ResponsiveContainer,
-  AreaChart,
-  Area
+  XAxis,
+  YAxis,
+  CartesianGrid
 } from "recharts";
 import "./TherapistDashboard.css";
 
@@ -32,18 +32,15 @@ const TherapistDashboard = () => {
   const navigate = useNavigate();
 
   // --- STATE ---
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState("dashboard");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedPatient, setSelectedPatient] = useState(null);
   
   const [loading, setLoading] = useState(true);
   const [patients, setPatients] = useState([]);
-  const [alerts, setAlerts] = useState([]);
   const [metrics, setMetrics] = useState({
     totalPatients: 0,
     highRiskCount: 0,
-    activeProtocols: 0,
+    totalExercises: 0,
     avgAdherence: 0,
   });
 
@@ -66,68 +63,89 @@ const TherapistDashboard = () => {
         });
 
         if (!response.ok) {
-            console.error("Server Status:", response.status);
-            throw new Error("API Connection Failed");
+            console.warn("API unavailable.");
+            setLoading(false);
+            return;
         }
 
-        const rawData = await response.json();
+        const rawResponse = await response.json();
+        const rawList = rawResponse.patients || (Array.isArray(rawResponse) ? rawResponse : []);
 
-        // CRITICAL CHECK: Ensure we have an array before mapping
-        if (!Array.isArray(rawData)) {
-            console.error("Invalid data format received:", rawData);
+        if (!Array.isArray(rawList)) {
             setPatients([]);
             setLoading(false);
             return;
         }
 
-        // PROCESS PATIENTS
-        const processedPatients = rawData.map(p => ({
-            ...p,
-            img: `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name)}&background=random&color=fff`,
-            lastActiveDate: new Date(p.lastActive),
-            // Ensure these fields exist for the UI, default to null if missing
-            age: p.age,
-            weight: p.weight,
-            bloodGroup: p.bloodGroup
-        }));
+        // --- PROCESS PATIENTS (REAL DATA ONLY) ---
+        const processedPatients = rawList.map((p) => {
+            // 1. Safe Date Parsing
+            const lastActiveRaw = p.lastActive || p.last_session_ts || p.updatedAt;
+            const lastActiveDate = lastActiveRaw ? new Date(lastActiveRaw) : null;
 
-        // Sort by Last Active (Desc)
-        processedPatients.sort((a, b) => b.lastActiveDate - a.lastActiveDate);
+            // 2. Real Counters
+            const completed = typeof p.completedSessions === 'number' ? p.completedSessions : 0;
+            const assigned = typeof p.assignedSessions === 'number' && p.assignedSessions > 0 ? p.assignedSessions : 20;
+            
+            // 3. Calculate Real Adherence
+            const realAdherence = Math.round((completed / assigned) * 100);
 
-        setPatients(processedPatients);
-        if (processedPatients.length > 0) setSelectedPatient(processedPatients[0]);
+            return {
+                ...p,
+                // Ensure ID exists
+                _id: p._id || p.id,
+                name: p.name || "Unknown Patient",
+                email: p.email || "No Email",
+                img: `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name || "User")}&background=E0F2FE&color=0284C7&bold=true`,
+                lastActiveDate: lastActiveDate,
+                
+                // Vitals
+                age: p.age || "--",
+                weight: p.weight || "--",
+                bloodGroup: p.bloodGroup || "--",
 
-        // CALCULATE METRICS
-        const totalP = processedPatients.length;
-        const riskCount = processedPatients.filter(p => p.status === "High Risk").length;
-        const activeProto = processedPatients.filter(p => p.hasActiveProtocol).length;
-        const avgAdh = totalP > 0 ? Math.round(processedPatients.reduce((sum, p) => sum + p.completionRate, 0) / totalP) : 0;
-
-        setMetrics({ totalPatients: totalP, highRiskCount: riskCount, activeProtocols: activeProto, avgAdherence: avgAdh });
-
-        // GENERATE ALERTS
-        const newAlerts = [];
-        processedPatients.forEach(p => {
-            if (p.status === "High Risk") {
-                newAlerts.push({
-                    id: p._id + "_risk",
-                    type: "risk",
-                    text: `${p.name} accuracy drop detected.`,
-                    time: "Attention Needed"
-                });
-            }
-            const oneDayAgo = new Date(Date.now() - 86400000);
-            if (new Date(p.lastActive) > oneDayAgo) {
-                newAlerts.push({
-                    id: p._id + "_act",
-                    type: "success",
-                    text: `${p.name} finished a session.`,
-                    time: new Date(p.lastActive).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
-                });
-            }
+                // Metrics
+                adherence: realAdherence > 100 ? 100 : realAdherence,
+                completedSessions: completed,
+                assignedSessions: assigned,
+                completionRate: p.completionRate || 0, // Real Accuracy
+                
+                // Arrays
+                loginHistory: Array.isArray(p.loginHistory) ? p.loginHistory : [],
+                accuracyTrend: Array.isArray(p.accuracyTrend) ? p.accuracyTrend : []
+            };
         });
 
-        setAlerts(newAlerts.slice(0, 10));
+        // Sort by Last Active (Most recent first)
+        processedPatients.sort((a, b) => {
+            if (!a.lastActiveDate) return 1;
+            if (!b.lastActiveDate) return -1;
+            return b.lastActiveDate - a.lastActiveDate;
+        });
+
+        setPatients(processedPatients);
+        
+        // Auto-select first patient
+        if (processedPatients.length > 0 && !selectedPatient) {
+            setSelectedPatient(processedPatients[0]);
+        }
+
+        // --- CALCULATE DASHBOARD METRICS ---
+        const totalP = processedPatients.length;
+        const riskCount = processedPatients.filter(p => p.status === "High Risk").length;
+        
+        const totalAdherence = processedPatients.reduce((sum, p) => sum + p.adherence, 0);
+        const avgAdh = totalP > 0 ? Math.round(totalAdherence / totalP) : 0;
+
+        const totalEx = 6; // Hardcoded per previous request
+
+        setMetrics({ 
+            totalPatients: totalP, 
+            highRiskCount: riskCount, 
+            totalExercises: totalEx, 
+            avgAdherence: avgAdh 
+        });
+        
         setLoading(false);
 
       } catch (err) {
@@ -137,171 +155,288 @@ const TherapistDashboard = () => {
     };
 
     fetchDashboardData();
-  }, [user]);
+  }, [user]); 
 
   // SEARCH FILTER
   const filteredPatients = useMemo(() => {
-    return patients.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    return patients.filter(p => 
+        p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        p.email?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
   }, [patients, searchTerm]);
 
-  if (loading) return <div className="loading-screen">Loading Dashboard...</div>;
+  // --- HANDLERS ---
+  const handleAssignClick = () => {
+    if (selectedPatient) {
+        navigate("/therapist/assignments", { 
+            state: { 
+                selectedPatient: selectedPatient,
+                patientId: selectedPatient._id 
+            } 
+        });
+    }
+  };
+
+  // --- SUB-COMPONENT: Status Badge ---
+  const StatusBadge = ({ status }) => {
+    const isRisk = status === "High Risk";
+    return (
+        <span className={`status-pill ${isRisk ? "risk" : "normal"}`}>
+            {status || "Active"}
+        </span>
+    );
+  };
+
+  // --- SUB-COMPONENT: Adherence Bar ---
+  const AdherenceBar = ({ value }) => {
+    const color = value < 50 ? "#ef4444" : value < 80 ? "#f59e0b" : "#10b981";
+    return (
+        <div className="adherence-wrapper">
+            <div className="progress-bg">
+                <div 
+                    className="progress-fill" 
+                    style={{ width: `${value}%`, backgroundColor: color }}
+                ></div>
+            </div>
+            <span className="adh-text">{value}%</span>
+        </div>
+    );
+  };
+
+  // --- HELPER: Format Last Active ---
+  const formatLastActive = (dateObj) => {
+    if (dateObj && dateObj.getFullYear() > 1970) {
+        return dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    return "Never";
+  };
+
+  if (loading) return <div className="loading-screen">Loading Patient Data...</div>;
 
   return (
     <div className="td-container">
-      {/* --- SIDEBAR --- */}
-      <aside className={`td-sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
-        <div className="td-logo-area">
-            {!isSidebarCollapsed && <span className="logo-text">Physio<span className="accent">Check</span></span>}
-            <button className="collapse-btn" onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}>
-                {isSidebarCollapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
-            </button>
-        </div>
-        <nav className="td-nav">
-            <div className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`} onClick={() => setActiveTab("dashboard")}>
-                <LayoutDashboard size={20} />{!isSidebarCollapsed && <span>Overview</span>}
-            </div>
-            <div className={`nav-item ${activeTab === "patients" ? "active" : ""}`} onClick={() => navigate("/therapist/monitoring")}>
-                <Users size={20} />{!isSidebarCollapsed && <span>Patients</span>}
-            </div>
-            <div className={`nav-item ${activeTab === "assignments" ? "active" : ""}`} onClick={() => navigate("/therapist/assignments")}>
-                <FileText size={20} />{!isSidebarCollapsed && <span>Assignments</span>}
-            </div>
-        </nav>
-        <div className="td-logout" onClick={logout}>
-            <LogOut size={20} />{!isSidebarCollapsed && <span>Logout</span>}
-        </div>
-      </aside>
-
-      {/* --- MAIN DASHBOARD --- */}
+      
+      {/* --- MAIN DASHBOARD AREA --- */}
       <main className="td-main">
         <header className="td-header">
-            <div><h1>Dashboard Overview</h1><p className="subtitle">Welcome back, Dr. {user?.name?.split(" ")[0] || "Therapist"}</p></div>
-            <div className="header-date">{new Date().toLocaleDateString("en-US", { weekday: 'long', day: 'numeric', month: 'long'})}</div>
+            <div className="header-left">
+                <div className="logo-box">
+                    <Activity size={24} color="white" />
+                </div>
+                <div className="header-text">
+                    <h1>PhysioCheck<span className="dot">.</span></h1>
+                    <p>Therapy Management Portal</p>
+                </div>
+            </div>
+            <div className="header-right">
+                <div className="doctor-badge">
+                   <div className="doc-avatar">Dr</div>
+                   <span>Dr. {user?.name?.split(" ")[0] || "Therapist"}</span>
+                </div>
+                <button className="logout-btn-header" onClick={logout} title="Logout">
+                    <LogOut size={18} />
+                </button>
+            </div>
         </header>
 
-        {/* METRICS */}
+        {/* METRICS ROW */}
         <div className="metrics-row">
-            <div className="metric-card"><div className="icon-box blue"><Users size={20}/></div><div><h3>{metrics.totalPatients}</h3><p>Total Patients</p></div></div>
-            <div className="metric-card"><div className="icon-box red"><AlertCircle size={20}/></div><div><h3>{metrics.highRiskCount}</h3><p>High Risk</p></div></div>
-            <div className="metric-card"><div className="icon-box orange"><Activity size={20}/></div><div><h3>{metrics.activeProtocols}</h3><p>Active Protocols</p></div></div>
-            <div className="metric-card"><div className="icon-box green"><TrendingUp size={20}/></div><div><h3>{metrics.avgAdherence}%</h3><p>Avg Adherence</p></div></div>
-        </div>
-
-        <div className="middle-section">
-            <div className="card notifications-panel">
-                <div className="card-header"><h4>Notifications</h4><span className="badge">{alerts.length}</span></div>
-                <div className="alert-list">
-                    {alerts.length === 0 ? <p className="empty-state">No new alerts.</p> : alerts.map((alert, i) => (
-                        <div key={i} className={`alert-item ${alert.type}`}>
-                            <div className="dot"></div>
-                            <div className="alert-content"><p>{alert.text}</p><span>{alert.time}</span></div>
-                        </div>
-                    ))}
+            <div className="metric-card">
+                <div className="metric-icon blue"><Users size={20}/></div>
+                <div className="metric-info">
+                    <h3>{metrics.totalPatients}</h3>
+                    <p>Active Patients</p>
                 </div>
             </div>
-            <div className="card graph-panel">
-                <div className="card-header"><h4>Global Engagement</h4></div>
-                <div className="chart-wrapper-main">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={[{name:'M',val:30},{name:'T',val:50},{name:'W',val:45},{name:'T',val:60},{name:'F',val:metrics.avgAdherence}]}>
-                            <defs>
-                                <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#2FA4A9" stopOpacity={0.3}/>
-                                    <stop offset="95%" stopColor="#2FA4A9" stopOpacity={0}/>
-                                </linearGradient>
-                            </defs>
-                            <Tooltip />
-                            <Area type="monotone" dataKey="val" stroke="#2FA4A9" fillOpacity={1} fill="url(#colorVal)" />
-                        </AreaChart>
-                    </ResponsiveContainer>
+            <div className="metric-card">
+                <div className="metric-icon red"><AlertCircle size={20}/></div>
+                <div className="metric-info">
+                    <h3>{metrics.highRiskCount}</h3>
+                    <p>Attention Needed</p>
+                </div>
+            </div>
+            <div className="metric-card">
+                <div className="metric-icon orange"><Dumbbell size={20}/></div>
+                <div className="metric-info">
+                    <h3>{metrics.totalExercises}</h3>
+                    <p>Total Exercises</p>
+                </div>
+            </div>
+            <div className="metric-card">
+                <div className="metric-icon green"><TrendingUp size={20}/></div>
+                <div className="metric-info">
+                    <h3>{metrics.avgAdherence}%</h3>
+                    <p>Avg Adherence</p>
                 </div>
             </div>
         </div>
 
-        <div className="recent-section">
-            <div className="section-header"><h4>Recent Active Patients</h4></div>
-            <div className="recent-grid">
-                {patients.length === 0 ? <p>No patients found.</p> : patients.slice(0, 4).map(patient => (
-                    <div key={patient._id} className={`patient-mini-card ${selectedPatient?._id === patient._id ? 'selected' : ''}`} onClick={() => setSelectedPatient(patient)}>
-                        <img src={patient.img} alt={patient.name} />
-                        <div className="pm-info"><h5>{patient.name}</h5><span>{patient.status}</span></div>
-                        <div className="pm-arrow"><ChevronRight size={16}/></div>
-                    </div>
-                ))}
+        {/* PATIENT LIST TABLE */}
+        <div className="patient-section-wrapper">
+            <div className="section-header">
+                <div className="sh-left">
+                    <h4>Patient Roster</h4>
+                    <span className="badge-count">{filteredPatients.length} Found</span>
+                </div>
+                <div className="search-bar-inline">
+                    <Search size={16} color="#94a3b8"/>
+                    <input 
+                        type="text" 
+                        placeholder="Search by name..." 
+                        value={searchTerm} 
+                        onChange={(e) => setSearchTerm(e.target.value)} 
+                    />
+                </div>
+            </div>
+
+            <div className="table-container">
+                <table className="clinical-table">
+                    <thead>
+                        <tr>
+                            <th width="35%">Patient</th>
+                            <th width="15%">Status</th>
+                            <th width="25%">Protocol Adherence</th>
+                            <th width="20%">Last Active</th>
+                            <th width="5%"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filteredPatients.length === 0 ? (
+                             <tr><td colSpan="5" className="empty-cell">No patients found matching your search.</td></tr>
+                        ) : (
+                            filteredPatients.map(patient => (
+                                <tr 
+                                    key={patient._id} 
+                                    className={selectedPatient?._id === patient._id ? "selected-row" : ""}
+                                    onClick={() => setSelectedPatient(patient)}
+                                >
+                                    <td>
+                                        <div className="user-cell">
+                                            <img src={patient.img} alt="p" />
+                                            <div>
+                                                <div className="u-name">{patient.name}</div>
+                                                <div className="u-email">{patient.email}</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><StatusBadge status={patient.status} /></td>
+                                    <td><AdherenceBar value={patient.adherence} /></td>
+                                    <td>
+                                        <div className="date-cell">
+                                            <Clock size={14} style={{marginRight:6, opacity:0.6}}/>
+                                            {formatLastActive(patient.lastActiveDate)}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <ChevronRight size={18} color="#cbd5e1"/>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
             </div>
         </div>
       </main>
 
-      {/* --- RIGHT PANEL (NOW SHOWS REAL DATA) --- */}
+      {/* --- RIGHT PANEL (UPDATED) --- */}
       <aside className="td-right-panel">
-        <div className="search-box">
-            <Search size={18} className="search-icon"/>
-            <input type="text" placeholder="Search patient..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-        </div>
-
-        {searchTerm && (
-            <div className="search-results-dropdown">
-                {filteredPatients.map(p => (
-                    <div key={p._id} className="search-result-item" onClick={() => { setSelectedPatient(p); setSearchTerm(""); }}>{p.name}</div>
-                ))}
-            </div>
-        )}
-
         {selectedPatient ? (
-            <div className="profile-detail">
-                <div className="profile-header">
-                    <img src={selectedPatient.img} alt="Profile" className="profile-lg-img"/>
-                    <h3>{selectedPatient.name}</h3>
-                    <p className="email-text">{selectedPatient.email}</p>
-                </div>
-
-                {/* --- THIS SECTION DISPLAYS THE REAL FETCHED DATA --- */}
-                <div className="vitals-grid">
-                    <div className="vital-item">
-                        <span className="label">Age</span>
-                        <span className="val">{selectedPatient.age || "--"}</span>
-                    </div>
-                    <div className="vital-item">
-                        <span className="label">Weight</span>
-                        <span className="val">{selectedPatient.weight || "--"}</span>
-                    </div>
-                    <div className="vital-item">
-                        <span className="label">Blood</span>
-                        <span className="val">{selectedPatient.bloodGroup || "--"}</span>
-                    </div>
-                </div>
-                {/* ------------------------------------------------- */}
-
-                <hr className="divider"/>
-
-                <div className="panel-section">
-                    <h4><Calendar size={16}/> Activity Heatmap</h4>
-                    <div className="calendar-heatmap">
-                        {Array.from({ length: 10 }).map((_, i) => (
-                            <div key={i} className={`cal-box ${selectedPatient.loginHistory[i] ? 'active' : ''}`}></div>
-                        ))}
+            <div className="detail-content">
+                
+                {/* 1. Header Card with Last Active */}
+                <div className="rp-header-card">
+                    <img src={selectedPatient.img} alt="Profile" className="rp-avatar"/>
+                    <div className="rp-header-info">
+                        <h2>{selectedPatient.name}</h2>
+                        <div className="rp-badges">
+                            <StatusBadge status={selectedPatient.status} />
+                            <div className="last-active-badge">
+                                <Clock size={12}/>
+                                {formatLastActive(selectedPatient.lastActiveDate)}
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <div className="panel-section">
-                    <h4><Activity size={16}/> Accuracy Trend</h4>
-                    <div className="mini-chart-container">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={selectedPatient.accuracyTrend}>
-                                <Line type="monotone" dataKey="val" stroke="#2FA4A9" strokeWidth={3} dot={false} />
-                                <Tooltip />
-                            </LineChart>
-                        </ResponsiveContainer>
+                {/* 2. Quick Vitals */}
+                <div className="rp-section vitals-box">
+                    <div className="vital">
+                        <span className="lbl">Age</span>
+                        <span className="val">{selectedPatient.age}</span>
                     </div>
-                    <div className="acc-stat"><span>Avg Accuracy:</span><strong>{selectedPatient.completionRate}%</strong></div>
+                    <div className="vr"></div>
+                    <div className="vital">
+                        <span className="lbl">Weight</span>
+                        <span className="val">{selectedPatient.weight}</span>
+                    </div>
+                    <div className="vr"></div>
+                    <div className="vital">
+                        <span className="lbl">Blood</span>
+                        <span className="val">{selectedPatient.bloodGroup}</span>
+                    </div>
                 </div>
 
-                <button className="full-profile-btn" onClick={() => navigate(`/therapist/patient-detail/${selectedPatient._id}`)}>
-                    View Full Medical Record
+                {/* 3. Action Buttons (Cleaned) */}
+                <div className="rp-actions">
+                    <button className="btn-assign" onClick={handleAssignClick}>
+                        <PlusCircle size={18}/> Assign New Exercise
+                    </button>
+                </div>
+
+                <div className="rp-divider"></div>
+
+                {/* 4. Performance Chart (Matched to Patient Analytics Style) */}
+                <div className="rp-section chart-section">
+                    <div className="chart-header">
+                        <h4><Activity size={16}/> Recovery Trend</h4>
+                        <span className="acc-score">{selectedPatient.completionRate}% Avg</span>
+                    </div>
+                    
+                    <div className="chart-box">
+                        {selectedPatient.accuracyTrend && selectedPatient.accuracyTrend.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={selectedPatient.accuracyTrend}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" hide />
+                                    <YAxis hide domain={[0, 100]} />
+                                    <Tooltip 
+                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                        cursor={{ stroke: '#2C5D31', strokeWidth: 1 }}
+                                    />
+                                    {/* Updated Line Style to Match Patient Daily Report (#2C5D31) */}
+                                    <Line 
+                                        type="monotone" 
+                                        dataKey="val" 
+                                        stroke="#2C5D31" 
+                                        strokeWidth={3} 
+                                        dot={{ r: 4, fill: '#2C5D31' }} 
+                                        activeDot={{ r: 6 }} 
+                                    />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        ) : (
+                           <div className="no-data-msg">Not enough session data yet.</div>
+                        )}
+                    </div>
+                    
+                    <div className="session-counter">
+                        <span>Completed Sessions</span>
+                        <strong>{selectedPatient.completedSessions} / {selectedPatient.assignedSessions}</strong>
+                    </div>
+                </div>
+
+                {/* 5. Footer Action */}
+                <button className="btn-full-record" onClick={() => navigate(`/therapist/patient-detail/${selectedPatient.email}`)}>
+                    <FileText size={16}/> View Full Medical Record
                 </button>
+
             </div>
         ) : (
-            <div className="no-selection"><User size={48} color="#cbd5e1"/><p>Select a patient</p></div>
+            <div className="no-selection-state">
+                <Users size={64} color="#e2e8f0"/>
+                <p>Select a patient from the roster<br/>to view details.</p>
+            </div>
         )}
       </aside>
     </div>

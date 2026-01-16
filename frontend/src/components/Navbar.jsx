@@ -1,5 +1,3 @@
-// frontend/src/components/Navbar.jsx
-
 import React, { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -9,7 +7,8 @@ import {
   FileText,
   ChevronDown,
   Menu,
-  X
+  X,
+  LayoutDashboard
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
@@ -28,6 +27,8 @@ const Navbar = () => {
     setIsMobileMenuOpen(false);
   };
 
+  const isActive = (path) => location.pathname === path;
+
   // --- Styles ---
   const navContainerStyle = {
     height: "80px",
@@ -40,7 +41,7 @@ const Navbar = () => {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "0 24px", // Reduced padding for mobile safety
+    padding: "0 24px",
     width: "100%",
     boxSizing: "border-box"
   };
@@ -57,6 +58,17 @@ const Navbar = () => {
     gap: "4px"
   };
 
+  const linkStyle = (active) => ({
+    textDecoration: "none",
+    color: active ? "#2C5D31" : "#555",
+    fontWeight: active ? "700" : "500",
+    fontSize: "0.95rem",
+    padding: "8px 12px",
+    borderRadius: "8px",
+    background: active ? "rgba(44, 93, 49, 0.08)" : "transparent",
+    transition: "all 0.2s"
+  });
+
   // --- LOGGED IN NAV ---
   if (user) {
     return (
@@ -70,10 +82,19 @@ const Navbar = () => {
           </Link>
 
           {/* RIGHT: Desktop Menu */}
-          <div className="desktop-menu" style={{ display: "none", alignItems: "center", gap: "20px" }}>
-             {/* We can toggle display via CSS media queries normally, 
-                 but for this inline React example, we assume desktop first structure. 
-                 See CSS snippet below for responsive hiding. */}
+          <div className="desktop-menu" style={{ display: "none", alignItems: "center", gap: "10px" }}>
+            
+            {/* Direct Navigation Links for Desktop */}
+            <Link to="/patient-dashboard" style={linkStyle(isActive('/patient-dashboard'))}>
+                Dashboard
+            </Link>
+            <Link to="/analytics/accuracy" style={linkStyle(isActive('/analytics/accuracy'))}>
+                Reports
+            </Link>
+            
+            <div style={{ width: '1px', height: '24px', background: '#eee', margin: '0 8px' }}></div>
+
+            {/* Profile Dropdown */}
             <div 
                 style={{ position: 'relative' }}
                 onMouseEnter={() => setIsProfileOpen(true)}
@@ -81,7 +102,7 @@ const Navbar = () => {
             >
                 <div style={{ 
                     display: 'flex', alignItems: 'center', gap: '12px', 
-                    cursor: 'pointer', padding: '8px 12px', borderRadius: '12px',
+                    cursor: 'pointer', padding: '6px 12px', borderRadius: '12px',
                     transition: 'background 0.2s',
                     background: isProfileOpen ? 'rgba(0,0,0,0.03)' : 'transparent'
                 }}>
@@ -155,10 +176,8 @@ const Navbar = () => {
             </div>
           </div>
 
-          {/* MOBILE TOGGLE (Visible only on small screens via CSS or Media Query hook) */}
+          {/* MOBILE TOGGLE */}
           <div style={{ display: "flex", alignItems: "center" }} className="mobile-toggle">
-             {/* In a real scenario, use CSS media queries to hide .desktop-menu and show .mobile-toggle.
-                 For now, we render this button. You should add the CSS logic below. */}
              <button 
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '8px' }}
@@ -201,19 +220,24 @@ const Navbar = () => {
                         </div>
                      </div>
 
-                     <Link to="/patient-dashboard" onClick={() => setIsMobileMenuOpen(false)} style={mobileLinkStyle}>Dashboard</Link>
-                     <Link to="/profile/overview" onClick={() => setIsMobileMenuOpen(false)} style={mobileLinkStyle}>My Profile</Link>
-                     <Link to="/analytics/accuracy" onClick={() => setIsMobileMenuOpen(false)} style={mobileLinkStyle}>Reports</Link>
+                     <Link to="/patient-dashboard" onClick={() => setIsMobileMenuOpen(false)} style={mobileLinkStyle(isActive('/patient-dashboard'))}>
+                        <LayoutDashboard size={18} /> Dashboard
+                     </Link>
+                     <Link to="/profile/overview" onClick={() => setIsMobileMenuOpen(false)} style={mobileLinkStyle(isActive('/profile/overview'))}>
+                        <Settings size={18} /> My Profile
+                     </Link>
+                     <Link to="/analytics/accuracy" onClick={() => setIsMobileMenuOpen(false)} style={mobileLinkStyle(isActive('/analytics/accuracy'))}>
+                        <FileText size={18} /> Reports
+                     </Link>
                      
-                     <button onClick={handleLogout} style={{ ...mobileLinkStyle, color: '#d32f2f', border: 'none', background: 'none', textAlign: 'left', paddingLeft: 0 }}>
-                        Sign Out
+                     <button onClick={handleLogout} style={{ ...mobileLinkStyle(false), color: '#d32f2f', border: 'none', background: 'none', textAlign: 'left', paddingLeft: 0 }}>
+                        <LogOut size={18} /> Sign Out
                      </button>
                 </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* CSS for Responsive visibility */}
         <style>{`
            @media (min-width: 768px) {
              .mobile-toggle { display: none !important; }
@@ -248,7 +272,6 @@ const Navbar = () => {
   );
 };
 
-// --- Sub-component Styles ---
 const dropdownItemStyle = {
     display: "flex",
     alignItems: "center",
@@ -261,13 +284,16 @@ const dropdownItemStyle = {
     color: 'inherit'
 };
 
-const mobileLinkStyle = {
+const mobileLinkStyle = (active) => ({
     textDecoration: 'none',
-    color: '#333',
+    color: active ? '#2C5D31' : '#333',
     fontWeight: '600',
     fontSize: '1rem',
-    padding: '5px 0'
-};
+    padding: '10px 0',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px'
+});
 
 const iconBoxStyle = {
     width: '36px',
