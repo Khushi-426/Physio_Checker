@@ -3,8 +3,8 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Search, ChevronRight, User, Calendar, 
-  CheckCircle, X, ArrowRight, Layers, Sparkles, Clock,
-  Hash, Activity, Dumbbell, Zap
+  CheckCircle, X, ArrowRight, Layers, Sparkles, 
+  Hash, Activity, AlertCircle
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -72,7 +72,6 @@ const MUSCLE_EXERCISE_MAP = {
 // ✅ REALISTIC BODY WITH NARROW PASTEL ZONES
 // =======================================================
 const RealisticBody = ({ onPartClick, activePart, view }) => {
-  
   const zones = {
     front: [
       { id: 'shoulders', x: 30, y: 15, width: 40, height: 12, rx: 6 },
@@ -84,6 +83,8 @@ const RealisticBody = ({ onPartClick, activePart, view }) => {
     ]
   };
 
+  const activeZones = zones[view] || [];
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <img 
@@ -91,9 +92,8 @@ const RealisticBody = ({ onPartClick, activePart, view }) => {
         alt={`Human Anatomy ${view}`} 
         style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'drop-shadow(0 15px 30px rgba(0,0,0,0.15))' }} 
       />
-
       <svg viewBox="0 0 100 100" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 10 }}>
-        {zones[view].map((zone) => (
+        {activeZones.map((zone) => (
           <motion.rect
             key={zone.id}
             x={zone.x} y={zone.y} width={zone.width} height={zone.height} rx={zone.rx}
@@ -115,6 +115,26 @@ const RealisticBody = ({ onPartClick, activePart, view }) => {
   );
 };
 
+// --- TOAST NOTIFICATION COMPONENT ---
+const NotificationToast = ({ message, type, onClose }) => (
+  <motion.div 
+    initial={{ opacity: 0, y: 50 }} 
+    animate={{ opacity: 1, y: 0 }} 
+    exit={{ opacity: 0, y: 20 }}
+    style={{
+      position: 'fixed', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
+      backgroundColor: type === 'error' ? '#FEF2F2' : '#F0FDF4',
+      border: `1px solid ${type === 'error' ? '#F87171' : '#4ADE80'}`,
+      padding: '12px 24px', borderRadius: '50px',
+      display: 'flex', alignItems: 'center', gap: '10px',
+      boxShadow: '0 10px 25px rgba(0,0,0,0.1)', zIndex: 1000
+    }}
+  >
+    {type === 'error' ? <AlertCircle color="#DC2626" size={20}/> : <CheckCircle color="#16A34A" size={20}/>}
+    <span style={{ color: type === 'error' ? '#991B1B' : '#166534', fontWeight: 600 }}>{message}</span>
+  </motion.div>
+);
+
 const TherapistAssignmentManager = () => {
   const navigate = useNavigate();
   
@@ -124,10 +144,13 @@ const TherapistAssignmentManager = () => {
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   
+  // ✅ FIXED: Variable 'view' matches setter 'setView'
   const [view, setView] = useState('front'); 
+  
   const [activeMuscle, setActiveMuscle] = useState(null);
   const [assignedExercises, setAssignedExercises] = useState([]);
   const [prescriptions, setPrescriptions] = useState({});
+  const [notification, setNotification] = useState(null); // { message, type }
 
   // --- FETCH DATA ---
   useEffect(() => {
@@ -145,6 +168,11 @@ const TherapistAssignmentManager = () => {
   }, []);
 
   // --- HANDLERS ---
+  const showNotification = (msg, type = 'success') => {
+    setNotification({ message: msg, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
   const handlePrescriptionChange = (exId, field, value) => {
     setPrescriptions(prev => ({
       ...prev,
@@ -172,10 +200,24 @@ const TherapistAssignmentManager = () => {
         exerciseName: exercise.name, 
         sets: parseInt(config.sets),
         reps: parseInt(config.reps),
-        duration: parseInt(config.duration)
+        duration: parseInt(config.duration),
+        difficulty: exercise.difficulty 
       });
+      // ✅ UI Notification instead of Alert
+      showNotification(`Assigned ${exercise.name} to ${selectedPatient.name}`, 'success');
     } catch (error) {
-      alert("Network Error: Could not sync assignment.");
+      console.error(error);
+      showNotification("Network Error: Could not sync assignment.", 'error');
+    }
+  };
+
+  const handleBack = () => {
+    if (selectedPatient) {
+      setSelectedPatient(null); // Return to directory
+      setActiveMuscle(null);    // Reset selection
+      setView('front');         // Reset view
+    } else {
+      navigate('/therapist-dashboard'); // Return to dashboard
     }
   };
 
@@ -198,14 +240,17 @@ const TherapistAssignmentManager = () => {
       {/* HEADER */}
       <header style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <button onClick={() => selectedPatient ? setSelectedPatient(null) : navigate('/therapist-dashboard')} style={styles.backButton}>
-            <ChevronRight style={{ transform: 'rotate(180deg)' }} size={16}/> {selectedPatient ? 'Directory' : 'Dashboard'}
+          <button onClick={handleBack} style={styles.backButton}>
+            <ChevronRight style={{ transform: 'rotate(180deg)' }} size={20}/> 
+            {selectedPatient ? 'Back to Directory' : 'Dashboard'}
           </button>
+          
           <div>
              <h1 style={styles.title}>{selectedPatient ? selectedPatient.name : 'Patient Assignment'}</h1>
              {selectedPatient && <span style={styles.subtitle}>Prescription Management</span>}
           </div>
         </div>
+
         {selectedPatient && (
            <div style={styles.patientBadge}>
              <div style={{ textAlign: 'right' }}>
@@ -250,6 +295,7 @@ const TherapistAssignmentManager = () => {
             {/* LEFT: BODY MODEL */}
             <div style={styles.modelContainer}>
               <div style={styles.toggleContainer}>
+                {/* ✅ FIXED: Use setView instead of setViewMode */}
                 <button onClick={() => setView('front')} style={view === 'front' ? styles.toggleActive : styles.toggleInactive}>Front</button>
                 <div style={styles.toggleDivider} />
                 <button onClick={() => setView('back')} style={view === 'back' ? styles.toggleActive : styles.toggleInactive}>Back</button>
@@ -274,8 +320,8 @@ const TherapistAssignmentManager = () => {
                 <>
                   <div style={styles.panelHeader}>
                     <div>
-                      <h2 style={styles.panelTitle}>{activeMuscle} Protocols</h2>
-                      <div style={styles.panelBreadcrumb}>Clinical Library • {MUSCLE_EXERCISE_MAP[activeMuscle]?.length} Available</div>
+                      <h2 style={styles.panelTitle}>{activeMuscle.charAt(0).toUpperCase() + activeMuscle.slice(1)} Protocols</h2>
+                      <div style={styles.panelBreadcrumb}>Clinical Library • {MUSCLE_EXERCISE_MAP[activeMuscle]?.length || 0} Available</div>
                     </div>
                     <button onClick={() => setActiveMuscle(null)} style={styles.closeBtn}><X size={20}/></button>
                   </div>
@@ -344,6 +390,17 @@ const TherapistAssignmentManager = () => {
           </div>
         )}
       </main>
+
+      {/* ✅ NOTIFICATION TOAST OVERLAY */}
+      <AnimatePresence>
+        {notification && (
+            <NotificationToast 
+                message={notification.message} 
+                type={notification.type} 
+                onClose={() => setNotification(null)}
+            />
+        )}
+      </AnimatePresence>
     </div>
   );
 };

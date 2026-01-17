@@ -39,7 +39,7 @@ app = Flask(__name__)
 
 # --- CORS FIX: Explicitly allow localhost:5173 with credentials ---
 CORS(app, resources={r"/*": {
-    "origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5000"],
+    "origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5000", "http://localhost:5173"],
     "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
     "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
 }}, supports_credentials=True)
@@ -186,7 +186,7 @@ def _get_frontend_exercise_list():
             "duration": "5 Mins",
             "color": "#E3F2FD",
             "iconColor": "#1565C0",
-            "recommended": True
+            "recommended": False
         },
         "Knee Lift": {
             "category": "Mobility",
@@ -206,7 +206,7 @@ def _get_frontend_exercise_list():
             "duration": "8 Mins",
             "color": "#FFF3E0",
             "iconColor": "#EF6C00",
-            "recommended": True
+            "recommended": False
         },
         "Squat": {
             "category": "Lower Body",
@@ -290,7 +290,7 @@ def handle_stop_session(data):
             total_errors = r.get("error_count", 0) + l.get("error_count", 0)
             duration = last_session_report.get("duration", 0) # Duration in seconds
 
-            # Calculate Accuracy logic (Simple: 100 - penalty per error)
+            # Calculate Accuracy logic
             base_accuracy = 100
             if total_reps > 0:
                 penalty = (total_errors / total_reps) * 15 
@@ -337,11 +337,10 @@ def handle_toggle_listening(data):
 # 6. API ROUTES
 # ----------------------------------------------------
 
-# --- NEW: User Profile Management Routes ---
+# --- AUTH & USER ROUTES ---
 
 @app.route("/api/user/profile/get", methods=["POST"])
 def get_user_profile():
-    """Fetches user profile details like age, weight, blood group."""
     data = request.get_json(silent=True) or {}
     email = data.get("email")
 
@@ -369,7 +368,6 @@ def get_user_profile():
 
 @app.route("/api/user/profile/update", methods=["POST"])
 def update_user_profile():
-    """Updates user profile details."""
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     
@@ -398,7 +396,131 @@ def update_user_profile():
         logger.error(f"Update Profile Error: {e}")
         return jsonify({"error": "Internal Error"}), 500
 
-# --- Existing Routes ---
+
+# --- EXERCISE & PROTOCOL ROUTES ---
+
+@app.route("/api/assign", methods=["POST"])
+def assign_exercise():
+    """
+    Therapist assigns an exercise to a patient.
+    Stores sets, reps, duration (days), and difficulty.
+    """
+    if protocols_collection is None or users_collection is None: 
+        return jsonify({"error": "Database unavailable"}), 503
+        
+    data = request.get_json(silent=True) or {}
+    patient_email = data.get("patientEmail")
+    exercise_name = data.get("exerciseName")
+    
+    if not patient_email or not exercise_name: 
+        return jsonify({"error": "Missing fields"}), 400
+        
+    patient = users_collection.find_one({"email": patient_email})
+    if not patient: 
+        return jsonify({"error": "Patient not found"}), 404
+    
+    # Defaults if not provided
+    sets = data.get("sets", 3)
+    reps = data.get("reps", 10)
+    difficulty = data.get("difficulty", "Medium")
+    duration = data.get("duration", 14) # Days
+    
+    # Find a therapist to link (Mock or Actual)
+    therapist = users_collection.find_one({"role": "therapist"})
+    therapist_id = therapist["_id"] if therapist else patient["_id"] 
+    
+    protocol_doc = {
+        "therapist": therapist_id,
+        "patient": patient["_id"],
+        "exerciseName": exercise_name,
+        "sets": sets,
+        "reps": reps,
+        "difficulty": difficulty,
+        "duration": duration,
+        "isActive": True,
+        "createdAt": datetime.now(),
+        "updatedAt": datetime.now()
+    }
+    
+    # Upsert: Update if exists, otherwise Insert
+    protocols_collection.update_one(
+        {"patient": patient["_id"], "exerciseName": exercise_name},
+        {"$set": protocol_doc},
+        upsert=True
+    )
+    
+    return jsonify({
+        "status": "assigned", 
+        "exercise": exercise_name,
+        "details": {"sets": sets, "reps": reps, "difficulty": difficulty}
+    }), 200
+
+@app.route("/api/exercises", methods=["GET"])
+def get_exercises():
+    """
+    Returns list of exercises.
+    If 'email' is provided, marks assigned exercises as recommended
+    AND overrides defaults with assigned sets/reps.
+    """
+    try:
+        base_list = _get_frontend_exercise_list()
+        email = request.args.get('email')
+        
+        assigned_map = {} # Store protocol details keyed by normalized exercise name
+
+        if email and users_collection is not None and protocols_collection is not None:
+            try:
+                user = users_collection.find_one({"email": email})
+                if user:
+                    protocols = protocols_collection.find({"patient": user["_id"], "isActive": True})
+                    for p in protocols:
+                        ex_name_db = p.get("exerciseName", "")
+                        
+                        # Normalize for matching
+                        key = ""
+                        if "bicep" in ex_name_db.lower(): key = "Bicep Curl"
+                        elif "shoulder" in ex_name_db.lower(): key = "Shoulder Press"
+                        elif "knee" in ex_name_db.lower(): key = "Knee Lift"
+                        elif "squat" in ex_name_db.lower(): key = "Squat"
+                        elif "row" in ex_name_db.lower(): key = "Standing Row"
+                        
+                        if key:
+                            assigned_map[key] = {
+                                "sets": p.get("sets", 3),
+                                "reps": p.get("reps", 10),
+                                "difficulty": p.get("difficulty", "Medium"),
+                                "duration": p.get("duration", 14)
+                            }
+            except Exception as db_err: 
+                print(f"Error fetching protocols: {db_err}")
+
+        # Merge Data
+        for ex in base_list:
+            if ex["title"] in assigned_map: 
+                ex["recommended"] = True
+                details = assigned_map[ex["title"]]
+                ex["assignedDetails"] = {
+                    "sets": details["sets"],
+                    "reps": details["reps"],
+                    "difficulty": details["difficulty"],
+                    "days": details["duration"]
+                }
+                # Update display string
+                ex["duration"] = f"{details['sets']} Sets • {details['reps']} Reps"
+                ex["difficulty"] = details["difficulty"]
+            else: 
+                ex["recommended"] = False
+                
+        return jsonify(base_list)
+    except Exception as e:
+        logger.error(f"Get Exercises Error: {e}")
+        return jsonify({"error": "Failed to fetch exercises"}), 500
+
+@app.route("/api/exercises", methods=["OPTIONS"])
+def options_exercises():
+    return jsonify({}), 200
+
+# --- OTHER ROUTES (HISTORY, ANALYTICS, ETC) ---
 
 @app.route("/api/sessions/my-history", methods=["GET", "OPTIONS"])
 def get_session_history():
@@ -424,38 +546,6 @@ def get_session_history():
         return jsonify(sessions), 200
     except Exception as e:
         return jsonify({"error": "Failed to fetch history"}), 500
-
-
-@app.route("/api/exercises", methods=["OPTIONS"])
-def options_exercises():
-    return jsonify({}), 200
-
-@app.route("/api/exercises", methods=["GET"])
-def get_exercises():
-    try:
-        base_list = _get_frontend_exercise_list()
-        email = request.args.get('email')
-        assigned_titles = []
-        if email and users_collection is not None:
-            try:
-                user = users_collection.find_one({"email": email})
-                if user and protocols_collection is not None:
-                    protocols = protocols_collection.find({"patient": user["_id"], "isActive": True})
-                    for p in protocols:
-                        ex_name = p.get("exerciseName", "")
-                        if "bicep" in ex_name.lower(): assigned_titles.append("Bicep Curl")
-                        elif "shoulder" in ex_name.lower(): assigned_titles.append("Shoulder Press")
-                        elif "knee" in ex_name.lower(): assigned_titles.append("Knee Lift")
-                        elif "squat" in ex_name.lower(): assigned_titles.append("Squat")
-                        elif "row" in ex_name.lower(): assigned_titles.append("Seated Row")
-            except Exception as db_err: pass
-
-        for ex in base_list:
-            if ex["title"] in assigned_titles: ex["recommended"] = True
-            else: ex["recommended"] = False
-        return jsonify(base_list)
-    except Exception as e:
-        return jsonify({"error": "Failed to fetch exercises"}), 500
 
 @app.route("/api/user/analytics_detailed", methods=["POST"])
 def analytics_detailed():
@@ -512,9 +602,6 @@ def toggle_ghost():
         return jsonify({"status": "success", "ghost_visible": new_state})
     return jsonify({"status": "error", "message": "No active session"}), 400
 
-# ----------------------------------------------------
-# 7. AUTH & OTHER ROUTES
-# ----------------------------------------------------
 @app.route("/api/auth/send-otp", methods=["POST"])
 def send_otp():
     if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
@@ -621,41 +708,9 @@ def google_auth():
     except Exception as e:
         return jsonify({"error": "Internal Server Error"}), 500
 
-@app.route("/api/assign", methods=["POST"])
-def assign_exercise():
-    if protocols_collection is None or users_collection is None: return jsonify({"error": "Database unavailable"}), 503
-    data = request.get_json(silent=True) or {}
-    patient_email = data.get("patientEmail")
-    exercise_name = data.get("exerciseName")
-    if not patient_email or not exercise_name: return jsonify({"error": "Missing fields"}), 400
-    patient = users_collection.find_one({"email": patient_email})
-    if not patient: return jsonify({"error": "Patient not found"}), 404
-    therapist = users_collection.find_one({"role": "therapist"})
-    therapist_id = therapist["_id"] if therapist else patient["_id"] 
-    protocol_doc = {
-        "therapist": therapist_id,
-        "patient": patient["_id"],
-        "exerciseName": exercise_name,
-        "sets": 3,
-        "reps": 10,
-        "difficulty": "MEDIUM",
-        "isActive": True,
-        "createdAt": datetime.now(),
-        "updatedAt": datetime.now()
-    }
-    protocols_collection.update_one(
-        {"patient": patient["_id"], "exerciseName": exercise_name},
-        {"$set": protocol_doc},
-        upsert=True
-    )
-    return jsonify({"status": "assigned", "exercise": exercise_name}), 200
-
 @app.route("/api/therapist/patients", methods=["GET"])
 def therapist_patients():
-    """Updated to include profile fields: age, weight, bloodGroup"""
     if users_collection is None: return jsonify({"patients": []}), 200
-    
-    # PROJECT FIELDS
     patients = list(users_collection.find(
         {"role": "patient"}, 
         {"_id": 0, "name": 1, "email": 1, "created_at": 1, "age": 1, "weight": 1, "bloodGroup": 1}

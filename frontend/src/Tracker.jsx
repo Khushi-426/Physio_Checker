@@ -55,7 +55,7 @@ const MOCK_EXERCISES = [
     difficulty: "Intermediate",
     color: "#E3F2FD",
     iconColor: "#1565C0",
-    recommended: true, // CHANGED TO TRUE -> APPEARS IN PRESCRIBED SECTION
+    recommended: false, 
     instructions: [
       "Stand with feet shoulder-width apart.",
       "Lower your hips back and down as if sitting in a chair.",
@@ -74,7 +74,7 @@ const MOCK_EXERCISES = [
     difficulty: "Beginner",
     color: "#F3E5F5",
     iconColor: "#7B1FA2",
-    recommended: true, // CHANGED TO TRUE -> APPEARS IN PRESCRIBED SECTION
+    recommended: false, 
     instructions: [
       "Stand holding a dumbbell in each hand with palms facing forward.",
       "Keep your elbows close to your torso at all times.",
@@ -125,7 +125,7 @@ const Tracker = () => {
     remaining: 0,
     exercise_name: "",
     tracked_joint_name: "",
-    gesture: "None", // FIXED: Initialized gesture to prevent crash
+    gesture: "None",
     ghost_pose: {
       landmarks: {},
       color: "GRAY",
