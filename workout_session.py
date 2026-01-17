@@ -33,9 +33,6 @@ class WorkoutSession:
         from rep_counter import RepCounter
         
         # --- ROBUST EXERCISE LOOKUP ---
-        # 1. Try exact match
-        # 2. Try stripping 's' (Squats -> Squat)
-        # 3. Default to Bicep Curl
         config = EXERCISE_PRESETS.get(exercise_name)
         if not config:
             config = EXERCISE_PRESETS.get(exercise_name.rstrip('s'))
@@ -88,7 +85,6 @@ class WorkoutSession:
         self.wrong_exercise_detected = False
         self.wrong_exercise_reason = ""
 
-        # GHOST CONNECTIONS (Legs Included)
         self.ghost_connections = [
             (mp_pose_lm.RIGHT_SHOULDER.value, mp_pose_lm.RIGHT_ELBOW.value), 
             (mp_pose_lm.RIGHT_ELBOW.value, mp_pose_lm.RIGHT_WRIST.value),
@@ -242,6 +238,8 @@ class WorkoutSession:
             self.arm_metrics['LEFT'].feedback = warning_msg
             self.arm_metrics['RIGHT'].feedback_color = "RED"
             self.arm_metrics['LEFT'].feedback_color = "RED"
+            self.rep_counter.count_error('RIGHT', current_time)
+            self.rep_counter.count_error('LEFT', current_time)
             return 
 
         if (current_time - self.last_ai_check) > self.ai_interval:
@@ -249,17 +247,49 @@ class WorkoutSession:
             self._update_ai_latch(results)
 
         angles = self.pose_processor.get_both_arm_angles(results)
+        
+        # --- EXERCISE TYPE DETECTION ---
+        is_squat = "squat" in self.exercise_config.name.lower()
+        is_knee_lift = "knee" in self.exercise_config.name.lower() or "lift" in self.exercise_config.name.lower()
+
         for arm in ['RIGHT', 'LEFT']:
             if angles[arm] is not None:
                 self.arm_metrics[arm].angle = angles[arm]
                 self.rep_counter.process_rep(arm, angles[arm], self.arm_metrics[arm], current_time, self.history)
                 
+                # --- SQUAT LOGIC ---
+                if is_squat:
+                    depth_pct = self.pose_processor.calculate_depth_percentage(angles[arm])
+                    self.arm_metrics[arm].angle = depth_pct * 1.8 # Map to progress bar
+                    if self.arm_metrics[arm].feedback_color == "GREEN":
+                         if depth_pct >= 100: self.arm_metrics[arm].feedback = "Excellent!"
+                         else: self.arm_metrics[arm].feedback = "Good"
+
+                # --- KNEE LIFT LOGIC (NEW) ---
+                elif is_knee_lift:
+                    # Calculate Lift % based on Hip Angle
+                    lift_pct = self.pose_processor.calculate_lift_percentage(angles[arm])
+                    # Map to progress bar (100% = full bar)
+                    # Frontend expects (angle/180)*100. So set angle = lift_pct * 1.8
+                    self.arm_metrics[arm].angle = lift_pct * 1.8
+                    
+                    if self.arm_metrics[arm].feedback_color == "GREEN":
+                        if lift_pct >= 95:
+                            self.arm_metrics[arm].feedback = "Great Height!"
+                        elif lift_pct > 50:
+                            self.arm_metrics[arm].feedback = "Lift Higher"
+                        else:
+                            self.arm_metrics[arm].feedback = "Ready"
+
+                # --- COLOR & ERROR OVERRIDES ---
                 if self.arm_metrics[arm].feedback:
-                    self.arm_metrics[arm].feedback_color = "RED"
-                    if self.arm_metrics[arm].feedback in ["Good extension", "Smooth movements", "Perfect Form!", "Great Control!"]:
+                    if self.arm_metrics[arm].feedback in ["Good extension", "Smooth movements", "Perfect Form!", "Great Control!", "Excellent!", "Good", "Great Height!", "Ready"]:
                         self.arm_metrics[arm].feedback_color = "GREEN"
                     if "Ease off" in self.arm_metrics[arm].feedback:
                         self.arm_metrics[arm].feedback_color = "YELLOW"
+                    # Critical Errors
+                    if any(x in self.arm_metrics[arm].feedback for x in ["Stop!", "Push Knees", "Keep Chest", "Lean Back", "Stand Tall"]):
+                        self.arm_metrics[arm].feedback_color = "RED"
 
         if results.pose_landmarks:
              self._calculate_ideal_pose_realtime(results.pose_landmarks.landmark)
@@ -376,12 +406,20 @@ class WorkoutSession:
         }
     
     def get_final_report(self) -> dict:
+        r_accs = self.rep_counter.rep_accuracies['RIGHT']
+        l_accs = self.rep_counter.rep_accuracies['LEFT']
+        all_accs = r_accs + l_accs
+        avg_acc = sum(all_accs) / len(all_accs) if all_accs else 0
+        r_err = self.rep_counter.feedback_error_counts['RIGHT']
+        l_err = self.rep_counter.feedback_error_counts['LEFT']
+
         return {
             'exercise_name': self.exercise_config.name, 
             'duration': round(self.history.time[-1] if self.history.time else 0, 2),
+            'average_accuracy': avg_acc,
             'summary': {
-                'RIGHT': {'total_reps': self.arm_metrics['RIGHT'].rep_count, 'error_count': self.history.right_feedback_count},
-                'LEFT': {'total_reps': self.arm_metrics['LEFT'].rep_count, 'error_count': self.history.left_feedback_count}
+                'RIGHT': {'total_reps': self.arm_metrics['RIGHT'].rep_count, 'error_count': r_err},
+                'LEFT': {'total_reps': self.arm_metrics['LEFT'].rep_count, 'error_count': l_err}
             },
             'calibration': {
                 'extended_threshold': self.calibration_manager.data.extended_threshold,

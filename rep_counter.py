@@ -36,6 +36,10 @@ class RepCounter:
         self.rep_min_angle = {'RIGHT': 180, 'LEFT': 180}
         self.rep_max_angle = {'RIGHT': 0, 'LEFT': 0}
         
+        # ACCURACY & ERROR TRACKING
+        self.rep_accuracies = {'RIGHT': [], 'LEFT': []}
+        self.feedback_error_counts = {'RIGHT': 0, 'LEFT': 0}
+        
         # Compliments
         self.compliments = [
             "Perfect Form!", 
@@ -59,6 +63,18 @@ class RepCounter:
         user_range = abs(self.rep_max_angle[arm] - self.rep_min_angle[arm])
         accuracy = (user_range / cal_range) * 100
         return min(100, int(accuracy))
+
+    def count_error(self, arm, current_time):
+        """
+        CENTRAL ERROR COUNTING METHOD
+        Strictly prevents error inflation by enforcing a 2-second cooldown.
+        Returns True if error was counted, False if blocked by cooldown.
+        """
+        if current_time > self.feedback_cooldown[arm]:
+            self.feedback_error_counts[arm] += 1
+            self.feedback_cooldown[arm] = current_time + 2.0
+            return True
+        return False
 
     def process_rep(self, arm, angle, metrics, current_time, history):
         """Process rep counting for a single side independently"""
@@ -129,14 +145,12 @@ class RepCounter:
         metrics.stage = new_stage
         
         # 1. RESET / READY AT EXTENSION (DOWN)
-        # For Squats: Standing up (Angle ~180). For Biceps: Arms down (Angle ~180).
         if new_stage == ArmStage.DOWN.value:
             self.ready_to_count[arm] = True
             self.rep_start_time[arm] = current_time
             self.rep_min_angle[arm], self.rep_max_angle[arm] = 180, 0
             
         # 2. DETECT REP COMPLETION (Moving from CONTRACTION -> EXTENSION)
-        # For Squats: Coming up from bottom. For Biceps: Lowering weight.
         elif prev_stage == ArmStage.UP.value and new_stage in [ArmStage.MOVING_DOWN.value, ArmStage.DOWN.value]:
             
             if self.ready_to_count[arm]:
@@ -145,7 +159,13 @@ class RepCounter:
                 if rep_duration >= self.min_rep_duration:
                     metrics.rep_count += 1
                     metrics.rep_time = rep_duration
-                    metrics.accuracy = self._calculate_rep_accuracy(arm)
+                    
+                    # Calculate Genuine Accuracy for this Rep
+                    calculated_accuracy = self._calculate_rep_accuracy(arm)
+                    metrics.accuracy = calculated_accuracy
+                    
+                    # STORE ACCURACY
+                    self.rep_accuracies[arm].append(calculated_accuracy)
                     
                     self.last_rep_time[arm] = current_time
                     self.current_compliment[arm] = random.choice(self.compliments)
@@ -165,30 +185,33 @@ class RepCounter:
         if current_time < self.color_lock_until[arm]:
             return
 
-        # 3. Form Coaching (Generic Phrasing)
-        new_feedback = ""
-        # Low angle (Full contraction/squeeze)
-        if angle < 10.0:
-            new_feedback = "Ease off slightly" # Generic: works for tight grip or deep squat
-            metrics.feedback_color = "YELLOW"
-        # High angle (Full extension)
-        elif angle > 170.0:
-            new_feedback = "Good extension" # Generic: works for Standing or Straight Arm
-            metrics.feedback_color = "GREEN"
-        else:
-            new_feedback = "Smooth movements"
-            metrics.feedback_color = "GREEN"
+        # 3. Form Coaching (Simplified - NO "EASE OFF")
+        new_feedback = "Smooth movements"
+        feedback_color = "GREEN"
+        
+        # High angle (Full extension) is still a positive indicator
+        if angle > 170.0:
+            new_feedback = "Good extension" 
+            feedback_color = "GREEN"
             
+        # ONLY trigger RED for critical tracking loss
         if metrics.stage == ArmStage.LOST.value:
             new_feedback = "Adjust your position"
-            metrics.feedback_color = "RED"
+            feedback_color = "RED"
             self.color_lock_until[arm] = current_time + 2.0
         
+        # Update Feedback
         if new_feedback != self.last_feedback[arm]:
             metrics.feedback = new_feedback
+            metrics.feedback_color = feedback_color
             self.last_feedback[arm] = new_feedback
+            
+            # TRACK ERRORS: Use central method with cooldown
+            if feedback_color == "RED":
+                self.count_error(arm, current_time)
         else:
             metrics.feedback = new_feedback
+            metrics.feedback_color = feedback_color
 
     def reset_arm(self, arm):
         """Reset tracking for specific side"""

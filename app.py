@@ -287,16 +287,18 @@ def handle_stop_session(data):
             l = last_session_report["summary"]["LEFT"]
             
             total_reps = r["total_reps"] + l["total_reps"]
-            total_errors = r.get("error_count", 0) + l.get("error_count", 0)
-            duration = last_session_report.get("duration", 0) # Duration in seconds
+            
+            # --- VALIDATION: PREVENT EMPTY SESSIONS ---
+            if total_reps == 0:
+                print(f"⚠️ Session skipped for {email}: 0 reps performed.")
+                emit("session_stopped", {"status": "success", "message": "No reps, session not saved."})
+                return
 
-            # Calculate Accuracy logic (Simple: 100 - penalty per error)
-            base_accuracy = 100
-            if total_reps > 0:
-                penalty = (total_errors / total_reps) * 15 
-                base_accuracy = max(0, 100 - penalty)
-            elif duration > 10:
-                base_accuracy = 50
+            duration = last_session_report.get("duration", 0) # Duration in seconds
+            
+            # --- GENUINE ACCURACY CALCULATION ---
+            # Now uses the average accuracy calculated from actual ROM of each rep
+            avg_accuracy = last_session_report.get("average_accuracy", 0)
             
             # Save to MongoDB
             session_doc = {
@@ -307,7 +309,7 @@ def handle_stop_session(data):
                 "date_str": datetime.now().strftime("%Y-%m-%d"),
                 "duration": duration,
                 "reps": total_reps,
-                "qualityScore": int(base_accuracy),
+                "qualityScore": int(avg_accuracy),
                 "completed": True,
                 "metrics": {
                     "leftErrors": l.get("error_count", 0),
@@ -318,7 +320,7 @@ def handle_stop_session(data):
             }
             
             sessions_collection.insert_one(session_doc)
-            print(f"✅ Session saved for {email}: {total_reps} reps, {int(base_accuracy)}% accuracy")
+            print(f"✅ Session saved for {email}: {total_reps} reps, {int(avg_accuracy)}% accuracy")
 
         emit("session_stopped", {"status": "success"})
     except Exception as e:
