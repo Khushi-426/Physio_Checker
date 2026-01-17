@@ -1,3 +1,5 @@
+// frontend/src/pages/PatientHome.jsx
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -8,7 +10,8 @@ import {
 } from 'lucide-react';
 import './PatientHome.css';
 
-const API_URL = "http://localhost:5001";
+// Use environment variable or fallback
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5001";
 
 const PatientHome = () => {
     const navigate = useNavigate();
@@ -70,7 +73,7 @@ const PatientHome = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: delay }}
-            whileHover={{ y: -5, boxShadow: "0 12px 24px rgba(0,0,0,0.1)" }}
+            whileHover={{ y: -5, boxShadow: "0 12px 24px rgba(0,0,0,0.06)" }}
         >
             <div className="stat-icon-box" style={{ background: `${color}15`, color: color }}>
                 <Icon size={22} />
@@ -87,10 +90,10 @@ const PatientHome = () => {
         <div className="animate-pulse">
             <div className="stats-grid-new" style={{ marginBottom: '2rem' }}>
                 {[1, 2, 3].map((i) => (
-                    <div key={i} style={{ height: '120px', background: '#f1f5f9', borderRadius: '16px' }}></div>
+                    <div key={i} style={{ height: '120px', background: 'rgba(0,0,0,0.03)', borderRadius: '16px' }}></div>
                 ))}
             </div>
-            <div style={{ height: '400px', background: '#f1f5f9', borderRadius: '16px' }}></div>
+            <div style={{ height: '400px', background: 'rgba(0,0,0,0.03)', borderRadius: '16px' }}></div>
         </div>
     );
 
@@ -117,11 +120,11 @@ const PatientHome = () => {
 
     const EmptyState = () => (
         <div style={{ 
-            textAlign: 'center', padding: '4rem 2rem', background: '#F8FAFC', 
+            textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.5)', 
             borderRadius: '16px', border: '2px dashed #E2E8F0', color: '#64748B' 
         }}>
             <div style={{ 
-                width: '64px', height: '64px', background: '#E2E8F0', borderRadius: '50%', 
+                width: '64px', height: '64px', background: '#F1F5F9', borderRadius: '50%', 
                 display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' 
             }}>
                 <Calendar size={32} color="#94A3B8" />
@@ -151,7 +154,9 @@ const PatientHome = () => {
                 <div className="hologram-wrapper">
                     {/* Ensure 'human.png' is in your public folder */}
                     <img src="/human.png" alt="Biometric Scan" className="human-model" />
-                    <div className="scan-line"></div>
+                    
+                    {/* Scan line removed as requested */}
+                    
                     <div className="model-status">
                         <div className="status-dot"></div>
                         <span>LIVE BIOMETRICS ACTIVE</span>
