@@ -57,25 +57,37 @@ class PoseProcessor:
             'LEFT': self.extract_arm_angle(landmarks, 'LEFT')
         }
 
+    def calculate_depth_percentage(self, knee_angle: float) -> int:
+        """Squat: 180 (Stand) -> 90 (Deep)"""
+        if knee_angle is None: return 0
+        rom_target = 180 - 90 
+        current_rom = 180 - knee_angle
+        depth = (current_rom / rom_target) * 100
+        return int(max(0, depth))
+
+    def calculate_lift_percentage(self, hip_angle: float) -> int:
+        """
+        Knee Lift: 180 (Stand) -> 90 (High Knee)
+        """
+        if hip_angle is None: return 0
+        # Target is 90 degrees flexion
+        rom_target = 180 - 90
+        current_rom = 180 - hip_angle
+        lift = (current_rom / rom_target) * 100
+        return int(max(0, lift))
+
     def detect_v_sign(self, results) -> bool:
         """
         Strict V-Sign Detection (Peace Sign).
-        Checks:
-        1. Index & Middle Extended (Tip < Pip)
-        2. Ring & Pinky Curled (Tip > Pip)
-        3. Spread: Distance(IndexTip, MiddleTip) > Distance(IndexPip, MiddlePip)
         """
         for hand_landmarks in [results.right_hand_landmarks, results.left_hand_landmarks]:
             if hand_landmarks:
                 lm = hand_landmarks.landmark
-                
-                # Y-coordinates (Note: Y increases downwards)
                 index_tip_y, index_pip_y = lm[8].y, lm[6].y
                 middle_tip_y, middle_pip_y = lm[12].y, lm[10].y
                 ring_tip_y, ring_pip_y = lm[16].y, lm[14].y
                 pinky_tip_y, pinky_pip_y = lm[20].y, lm[18].y
                 
-                # 1. Check Extensions (Index/Middle UP, Ring/Pinky DOWN)
                 fingers_correct = (
                     index_tip_y < index_pip_y and
                     middle_tip_y < middle_pip_y and
@@ -86,7 +98,6 @@ class PoseProcessor:
                 if not fingers_correct:
                     continue
 
-                # 2. Check "V" Spread (Euclidean Distance)
                 def dist(p1, p2):
                     return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 

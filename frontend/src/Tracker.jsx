@@ -137,7 +137,7 @@ const Tracker = () => {
   const [sessionTime, setSessionTime] = useState(0);
   const [feedback, setFeedback] = useState("Initializing...");
   const [videoTimestamp, setVideoTimestamp] = useState(Date.now());
-  const [connectionStatus, setConnectionStatus] = useState("DISCONNECTED");
+  const [connectionStatus, setConnectionStatus] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
 
   const [calibrationProgress, setCalibrationProgress] = useState(0);
@@ -888,6 +888,8 @@ const Tracker = () => {
   const renderSession = () => {
     const jointName = data?.tracked_joint_name || "JOINT";
     const feedbackColor = data?.RIGHT.feedback_color || "GRAY";
+    const isSquat = selectedExercise?.title.toLowerCase().includes("squat");
+    const isKneeLift = selectedExercise?.title.toLowerCase().includes("knee") || selectedExercise?.title.toLowerCase().includes("lift");
 
     return (
       <motion.div
@@ -968,7 +970,40 @@ const Tracker = () => {
           </div>
 
           <div style={{ flex: 1, overflowY: "auto", padding: "25px" }}>
-            {["RIGHT", "LEFT"].map((arm) => {
+            {/* CONDITIONAL RENDERING */}
+            {isSquat ? (
+               <div
+                  style={{
+                    marginBottom: "25px",
+                    background: data.RIGHT?.feedback_color === "GREEN" ? "#E8F5E9" : data.RIGHT?.feedback_color === "RED" ? "#FFEBEE" : "#f8f9fa",
+                    borderRadius: "18px",
+                    padding: "20px",
+                    border: "1px solid #eee",
+                    transition: "all 0.3s ease",
+                  }}
+               >
+                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
+                    <h3 style={{ color: "#444", fontSize: "0.9rem", fontWeight: "800", margin: 0 }}>SQUAT</h3>
+                    <div style={{ background: data.RIGHT?.accuracy > 85 ? "#2C5D31" : "#D32F2F", color: "white", padding: "4px 8px", borderRadius: "12px", fontSize: "0.65rem", fontWeight: "bold" }}>
+                        <Target size={12} /> {data.RIGHT?.accuracy || 100}%
+                    </div>
+                 </div>
+
+                 <div style={{ textAlign: "center", marginBottom: "15px" }}>
+                    <div style={{ fontSize: "0.7rem", color: "#aaa", fontWeight: "700" }}>REPS</div>
+                    <div style={{ fontSize: "2.5rem", fontWeight: "800", color: "#222" }}>{data.RIGHT?.rep_count || 0}</div>
+                 </div>
+
+                 <div style={{ height: "12px", background: "rgba(0,0,0,0.05)", borderRadius: "6px", overflow: "hidden", position: "relative" }}>
+                    <motion.div 
+                        animate={{ width: data.RIGHT ? `${(data.RIGHT.angle / 180) * 100}%` : "0%" }}
+                        style={{ height: "100%", background: "#2C5D31" }}
+                    />
+                 </div>
+                 <div style={{ textAlign: "right", fontSize: "0.7rem", color: "#888", marginTop: "5px" }}>DEPTH INDICATOR</div>
+               </div>
+            ) : (
+              ["RIGHT", "LEFT"].map((arm) => {
               const metrics = data ? data[arm] : null;
               const cardColor =
                 metrics?.feedback_color === "RED"
@@ -976,6 +1011,10 @@ const Tracker = () => {
                   : metrics?.feedback_color === "GREEN"
                   ? "#E8F5E9"
                   : "#f8f9fa";
+              
+              // KNEE LIFT specific label
+              const label = isKneeLift ? "LIFT HEIGHT" : "ANGLE";
+              const angleVal = isKneeLift ? "--" : (metrics ? Math.round(metrics.angle) : "--") + "°";
 
               return (
                 <div
@@ -1012,7 +1051,7 @@ const Tracker = () => {
                         margin: 0,
                       }}
                     >
-                      {arm} {jointName.toUpperCase()}
+                      {arm} {isKneeLift ? "LEG" : jointName.toUpperCase()}
                     </h3>
 
                     {/* DYNAMIC ACCURACY BADGE */}
@@ -1070,8 +1109,10 @@ const Tracker = () => {
                           fontWeight: "700",
                         }}
                       >
-                        ANGLE
+                        {label}
                       </div>
+                      {/* Hide number if knee lift, show progress bar instead */}
+                      {!isKneeLift && (
                       <div
                         style={{
                           fontSize: "2.2rem",
@@ -1080,10 +1121,12 @@ const Tracker = () => {
                           color: "#222",
                         }}
                       >
-                        {metrics ? Math.round(metrics.angle) : "--"}°
+                        {angleVal}
                       </div>
+                      )}
                     </div>
                   </div>
+                  
                   <div
                     style={{
                       height: "6px",
@@ -1103,7 +1146,8 @@ const Tracker = () => {
                   </div>
                 </div>
               );
-            })}
+            })
+            )}
           </div>
 
           <div style={{ padding: "25px", borderTop: "1px solid #eee" }}>
