@@ -6,7 +6,7 @@ import {
   CheckCircle, X, ArrowRight, Layers, Sparkles, 
   Hash, Activity, AlertCircle
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 // --- CONFIGURATION ---
 const API_BASE = 'http://localhost:5001/api';
@@ -137,20 +137,25 @@ const NotificationToast = ({ message, type, onClose }) => (
 
 const TherapistAssignmentManager = () => {
   const navigate = useNavigate();
+  const location = useLocation(); 
   
   // --- STATE ---
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedPatient, setSelectedPatient] = useState(null);
+  
+  // Initialize patient from direct navigation
+  const [selectedPatient, setSelectedPatient] = useState(location.state?.selectedPatient || null);
+  
+  // ✅ NEW: Track if we came directly from Dashboard (Direct Mode)
+  // This state is set once on mount and persists
+  const [isDirectMode] = useState(!!location.state?.selectedPatient);
+
   const [searchQuery, setSearchQuery] = useState('');
-  
-  // ✅ FIXED: Variable 'view' matches setter 'setView'
   const [view, setView] = useState('front'); 
-  
   const [activeMuscle, setActiveMuscle] = useState(null);
   const [assignedExercises, setAssignedExercises] = useState([]);
   const [prescriptions, setPrescriptions] = useState({});
-  const [notification, setNotification] = useState(null); // { message, type }
+  const [notification, setNotification] = useState(null);
 
   // --- FETCH DATA ---
   useEffect(() => {
@@ -203,7 +208,6 @@ const TherapistAssignmentManager = () => {
         duration: parseInt(config.duration),
         difficulty: exercise.difficulty 
       });
-      // ✅ UI Notification instead of Alert
       showNotification(`Assigned ${exercise.name} to ${selectedPatient.name}`, 'success');
     } catch (error) {
       console.error(error);
@@ -211,13 +215,19 @@ const TherapistAssignmentManager = () => {
     }
   };
 
+  // ✅ UPDATED BACK HANDLER
   const handleBack = () => {
-    if (selectedPatient) {
-      setSelectedPatient(null); // Return to directory
-      setActiveMuscle(null);    // Reset selection
-      setView('front');         // Reset view
-    } else {
-      navigate('/therapist-dashboard'); // Return to dashboard
+    // If we are in "Direct Mode" (from Dashboard) OR currently have no patient selected (root of directory)
+    // -> Go to Dashboard
+    if (isDirectMode || !selectedPatient) {
+        navigate('/therapist-dashboard');
+    } 
+    // If we are in "Directory Mode" AND have a patient selected
+    // -> Go back to the Directory List
+    else {
+        setSelectedPatient(null);
+        setActiveMuscle(null);
+        setView('front');
     }
   };
 
@@ -232,7 +242,8 @@ const TherapistAssignmentManager = () => {
     return result.sort((a, b) => new Date(b.date_joined) - new Date(a.date_joined)).slice(0, 6);
   }, [patients, searchQuery]);
 
-  if (loading) return <div style={styles.loadingState}>Loading Clinical Records...</div>;
+  // Loading Logic: Only block if we don't have a patient selected (Direct Mode skips this)
+  if (loading && !selectedPatient) return <div style={styles.loadingState}>Loading Clinical Records...</div>;
 
   return (
     <div style={styles.container}>
@@ -242,7 +253,8 @@ const TherapistAssignmentManager = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <button onClick={handleBack} style={styles.backButton}>
             <ChevronRight style={{ transform: 'rotate(180deg)' }} size={20}/> 
-            {selectedPatient ? 'Back to Directory' : 'Dashboard'}
+            {/* ✅ DYNAMIC LABEL: Shows 'Dashboard' if in Direct Mode */}
+            {(selectedPatient && !isDirectMode) ? 'Back to Directory' : 'Dashboard'}
           </button>
           
           <div>
@@ -295,7 +307,6 @@ const TherapistAssignmentManager = () => {
             {/* LEFT: BODY MODEL */}
             <div style={styles.modelContainer}>
               <div style={styles.toggleContainer}>
-                {/* ✅ FIXED: Use setView instead of setViewMode */}
                 <button onClick={() => setView('front')} style={view === 'front' ? styles.toggleActive : styles.toggleInactive}>Front</button>
                 <div style={styles.toggleDivider} />
                 <button onClick={() => setView('back')} style={view === 'back' ? styles.toggleActive : styles.toggleInactive}>Back</button>

@@ -24,7 +24,9 @@ import {
   ResponsiveContainer,
   XAxis,
   YAxis,
-  CartesianGrid
+  CartesianGrid,
+  AreaChart,
+  Area
 } from "recharts";
 import "./TherapistDashboard.css";
 
@@ -35,9 +37,12 @@ const TherapistDashboard = () => {
   // --- STATE ---
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedPatient, setSelectedPatient] = useState(null);
-  
   const [loading, setLoading] = useState(true);
   const [patients, setPatients] = useState([]);
+  
+  // ✅ FILTER STATE (Default: 'all')
+  const [graphFilter, setGraphFilter] = useState('all'); 
+
   const [metrics, setMetrics] = useState({
     totalPatients: 0,
     highRiskCount: 0,
@@ -64,13 +69,12 @@ const TherapistDashboard = () => {
         });
 
         if (!response.ok) {
-            console.warn("API unavailable.");
             setLoading(false);
             return;
         }
 
         const rawResponse = await response.json();
-        const rawList = rawResponse.patients || (Array.isArray(rawResponse) ? rawResponse : []);
+        const rawList = rawResponse.patients || [];
 
         if (!Array.isArray(rawList)) {
             setPatients([]);
@@ -78,67 +82,76 @@ const TherapistDashboard = () => {
             return;
         }
 
-        // --- PROCESS PATIENTS (REAL DATA ONLY) ---
+        // --- PROCESS PATIENTS ---
         const processedPatients = rawList.map((p) => {
-            // 1. Safe Date Parsing
-            const lastActiveRaw = p.lastActive || p.last_session_ts || p.updatedAt;
-            const lastActiveDate = lastActiveRaw ? new Date(lastActiveRaw) : null;
+            // ✅ LAST ACTIVE PARSING
+            let lastActiveDate = null;
+            const rawTs = p.lastActive || p.last_session_ts || p.updatedAt;
+            
+            if (rawTs) {
+                const tsNum = Number(rawTs);
+                if (!isNaN(tsNum)) {
+                     // If year is 1970 (small number), assume it's seconds -> convert to ms
+                     lastActiveDate = new Date(tsNum > 10000000000 ? tsNum : tsNum * 1000);
+                } else {
+                     lastActiveDate = new Date(rawTs);
+                }
+            }
 
-            // 2. Real Counters
             const completed = typeof p.completedSessions === 'number' ? p.completedSessions : 0;
             const assigned = typeof p.assignedSessions === 'number' && p.assignedSessions > 0 ? p.assignedSessions : 20;
-            
-            // 3. Calculate Real Adherence
             const realAdherence = Math.round((completed / assigned) * 100);
+
+            // ✅ HANDLE ACCURACY TREND (WITH TIMESTAMPS)
+            let rawTrend = Array.isArray(p.accuracyTrend) ? p.accuracyTrend : [];
+            const formattedTrend = rawTrend.map((item, i) => {
+                const val = typeof item === 'object' ? item.val : item;
+                const ts = typeof item === 'object' ? item.ts : null;
+                return {
+                    name: `S${i + 1}`,
+                    val: Number(val),
+                    ts: ts ? (ts > 10000000000 ? ts : ts * 1000) : null // normalize to ms
+                };
+            });
 
             return {
                 ...p,
-                // Ensure ID exists
                 _id: p._id || p.id,
                 name: p.name || "Unknown Patient",
                 email: p.email || "No Email",
                 img: `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name || "User")}&background=E0F2FE&color=0284C7&bold=true`,
                 lastActiveDate: lastActiveDate,
-                
-                // Vitals
                 age: p.age || "--",
                 weight: p.weight || "--",
                 bloodGroup: p.bloodGroup || "--",
-
-                // Metrics
                 adherence: realAdherence > 100 ? 100 : realAdherence,
                 completedSessions: completed,
                 assignedSessions: assigned,
-                completionRate: p.completionRate || 0, // Real Accuracy
-                
-                // Arrays
+                completionRate: p.completionRate || 0,
                 loginHistory: Array.isArray(p.loginHistory) ? p.loginHistory : [],
-                accuracyTrend: Array.isArray(p.accuracyTrend) ? p.accuracyTrend : []
+                accuracyTrend: formattedTrend 
             };
         });
 
-        // Sort by Last Active (Most recent first)
+        // Sort by Last Active
         processedPatients.sort((a, b) => {
-            if (!a.lastActiveDate) return 1;
-            if (!b.lastActiveDate) return -1;
-            return b.lastActiveDate - a.lastActiveDate;
+            const dateA = a.lastActiveDate || new Date(0);
+            const dateB = b.lastActiveDate || new Date(0);
+            return dateB - dateA;
         });
 
         setPatients(processedPatients);
         
-        // Auto-select first patient
         if (processedPatients.length > 0 && !selectedPatient) {
             setSelectedPatient(processedPatients[0]);
         }
 
-        // --- CALCULATE DASHBOARD METRICS ---
+        // Metrics Calculation
         const totalP = processedPatients.length;
         const riskCount = processedPatients.filter(p => p.status === "High Risk").length;
-        
         const totalAdherence = processedPatients.reduce((sum, p) => sum + p.adherence, 0);
         const avgAdh = totalP > 0 ? Math.round(totalAdherence / totalP) : 0;
-
-        const totalEx = 6; // Hardcoded per previous request
+        const totalEx = 6; 
 
         setMetrics({ 
             totalPatients: totalP, 
@@ -158,7 +171,26 @@ const TherapistDashboard = () => {
     fetchDashboardData();
   }, [user]); 
 
-  // SEARCH FILTER
+  // --- FILTERED GRAPH DATA LOGIC ---
+  const getFilteredData = () => {
+    if (!selectedPatient || !selectedPatient.accuracyTrend) return [];
+    
+    const data = selectedPatient.accuracyTrend;
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+
+    if (graphFilter === '7d') {
+        return data.filter(d => d.ts && (now - d.ts) <= (7 * oneDay));
+    }
+    if (graphFilter === '30d') {
+        return data.filter(d => d.ts && (now - d.ts) <= (30 * oneDay));
+    }
+    return data; // 'all'
+  };
+
+  const graphData = getFilteredData();
+
+  // --- HELPERS ---
   const filteredPatients = useMemo(() => {
     return patients.filter(p => 
         p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -166,7 +198,6 @@ const TherapistDashboard = () => {
     );
   }, [patients, searchTerm]);
 
-  // --- HANDLERS ---
   const handleAssignClick = () => {
     if (selectedPatient) {
         navigate("/therapist/assignments", { 
@@ -178,7 +209,6 @@ const TherapistDashboard = () => {
     }
   };
 
-  // --- SUB-COMPONENT: Status Badge ---
   const StatusBadge = ({ status }) => {
     const isRisk = status === "High Risk";
     return (
@@ -188,7 +218,6 @@ const TherapistDashboard = () => {
     );
   };
 
-  // --- SUB-COMPONENT: Adherence Bar ---
   const AdherenceBar = ({ value }) => {
     const color = value < 50 ? "#ef4444" : value < 80 ? "#f59e0b" : "#10b981";
     return (
@@ -204,7 +233,6 @@ const TherapistDashboard = () => {
     );
   };
 
-  // --- HELPER: Format Last Active ---
   const formatLastActive = (dateObj) => {
     if (dateObj && dateObj.getFullYear() > 1970) {
         return dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -212,10 +240,64 @@ const TherapistDashboard = () => {
     return "Never";
   };
 
-  // --- ✅ LOADING STATE: ANIMATION ONLY ---
+  // --- STYLES ---
+  const styles = {
+    glassCard: {
+      background: 'linear-gradient(145deg, rgba(255,255,255,0.9), rgba(255,255,255,0.6))',
+      backdropFilter: 'blur(20px)',
+      WebkitBackdropFilter: 'blur(20px)',
+      borderRadius: '50px',
+      border: '1px solid rgba(255, 255, 255, 0.8)',
+      boxShadow: '0 20px 40px -10px rgba(14, 165, 233, 0.15)',
+      padding: '30px 20px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      marginBottom: '24px'
+    },
+    circularAvatar: {
+      width: '110px',
+      height: '110px', 
+      borderRadius: '50%',
+      objectFit: 'cover',
+      border: '4px solid white',
+      boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+      marginBottom: '16px'
+    },
+    profileName: {
+      fontSize: '1.4rem',
+      fontWeight: '800',
+      color: '#1e293b',
+      margin: '0 0 8px 0',
+      textAlign: 'center'
+    },
+    glassVitals: {
+      display: 'flex',
+      justifyContent: 'space-around',
+      width: '100%',
+      background: 'rgba(255,255,255,0.5)',
+      borderRadius: '30px',
+      padding: '16px',
+      marginTop: '20px',
+      border: '1px solid rgba(255,255,255,0.4)'
+    },
+    filterBtn: (isActive) => ({
+        padding: '4px 10px',
+        fontSize: '0.75rem',
+        borderRadius: '12px',
+        border: 'none',
+        background: isActive ? '#0ea5e9' : 'transparent',
+        color: isActive ? 'white' : '#64748b',
+        cursor: 'pointer',
+        fontWeight: '600',
+        transition: 'all 0.2s'
+    })
+  };
+
   if (loading) return (
     <div style={{
         display: 'flex', 
+        flexDirection: 'column',
         alignItems: 'center', 
         justifyContent: 'center', 
         height: '100vh', 
@@ -227,15 +309,17 @@ const TherapistDashboard = () => {
           src="/LoadingAnimation.lottie"
           loop
           autoplay
+          style={{ width: '100%', height: '100%' }}
         />
       </div>
+      <p style={{ marginTop: '20px', color: '#94a3b8', fontSize: '1rem' }}>
+        Loading Dashboard...
+      </p>
     </div>
   );
 
   return (
     <div className="td-container">
-      
-      {/* --- MAIN DASHBOARD AREA --- */}
       <main className="td-main">
         <header className="td-header">
             <div className="header-left">
@@ -258,7 +342,7 @@ const TherapistDashboard = () => {
             </div>
         </header>
 
-        {/* METRICS ROW */}
+        {/* Metrics Row */}
         <div className="metrics-row">
             <div className="metric-card">
                 <div className="metric-icon blue"><Users size={20}/></div>
@@ -290,7 +374,7 @@ const TherapistDashboard = () => {
             </div>
         </div>
 
-        {/* PATIENT LIST TABLE */}
+        {/* Patient Table */}
         <div className="patient-section-wrapper">
             <div className="section-header">
                 <div className="sh-left">
@@ -358,95 +442,131 @@ const TherapistDashboard = () => {
         </div>
       </main>
 
-      {/* --- RIGHT PANEL (UPDATED) --- */}
-      <aside className="td-right-panel">
+      <aside className="td-right-panel" style={{ background: '#f8fafc' }}>
         {selectedPatient ? (
-            <div className="detail-content">
+            <div className="detail-content" style={{ padding: '24px' }}>
                 
-                {/* 1. Header Card with Last Active */}
-                <div className="rp-header-card">
-                    <img src={selectedPatient.img} alt="Profile" className="rp-avatar"/>
-                    <div className="rp-header-info">
-                        <h2>{selectedPatient.name}</h2>
-                        <div className="rp-badges">
-                            <StatusBadge status={selectedPatient.status} />
-                            <div className="last-active-badge">
-                                <Clock size={12}/>
-                                {formatLastActive(selectedPatient.lastActiveDate)}
-                            </div>
+                {/* Profile Card */}
+                <div style={styles.glassCard}>
+                    <img 
+                      src={selectedPatient.img} 
+                      alt="Profile" 
+                      style={styles.circularAvatar}
+                    />
+                    <h2 style={styles.profileName}>{selectedPatient.name}</h2>
+                    
+                    <div className="rp-badges" style={{ justifyContent: 'center', width: '100%', gap: '10px' }}>
+                        <StatusBadge status={selectedPatient.status} />
+                        <div className="last-active-badge" style={{ background: 'white', border: '1px solid #e2e8f0' }}>
+                            <Clock size={12}/>
+                            {formatLastActive(selectedPatient.lastActiveDate)}
+                        </div>
+                    </div>
+
+                    <div style={styles.glassVitals}>
+                        <div className="vital">
+                            <span className="lbl">Age</span>
+                            <span className="val">{selectedPatient.age}</span>
+                        </div>
+                        <div className="vr"></div>
+                        <div className="vital">
+                            <span className="lbl">Weight</span>
+                            <span className="val">{selectedPatient.weight}</span>
+                        </div>
+                        <div className="vr"></div>
+                        <div className="vital">
+                            <span className="lbl">Blood</span>
+                            <span className="val">{selectedPatient.bloodGroup}</span>
                         </div>
                     </div>
                 </div>
 
-                {/* 2. Quick Vitals */}
-                <div className="rp-section vitals-box">
-                    <div className="vital">
-                        <span className="lbl">Age</span>
-                        <span className="val">{selectedPatient.age}</span>
-                    </div>
-                    <div className="vr"></div>
-                    <div className="vital">
-                        <span className="lbl">Weight</span>
-                        <span className="val">{selectedPatient.weight}</span>
-                    </div>
-                    <div className="vr"></div>
-                    <div className="vital">
-                        <span className="lbl">Blood</span>
-                        <span className="val">{selectedPatient.bloodGroup}</span>
-                    </div>
-                </div>
-
-                {/* 3. Action Buttons (Cleaned) */}
-                <div className="rp-actions">
-                    <button className="btn-assign" onClick={handleAssignClick}>
+                {/* Assign Button */}
+                <div className="rp-actions" style={{ marginBottom: '24px' }}>
+                    <button 
+                        className="btn-assign" 
+                        onClick={handleAssignClick}
+                        style={{ 
+                            borderRadius: '25px',
+                            boxShadow: '0 8px 20px -4px rgba(14, 165, 233, 0.4)',
+                            fontWeight: '700'
+                        }}
+                    >
                         <PlusCircle size={18}/> Assign New Exercise
                     </button>
                 </div>
 
-                <div className="rp-divider"></div>
-
-                {/* 4. Performance Chart (Matched to Patient Analytics Style) */}
-                <div className="rp-section chart-section">
-                    <div className="chart-header">
-                        <h4><Activity size={16}/> Recovery Trend</h4>
-                        <span className="acc-score">{selectedPatient.completionRate}% Avg</span>
+                {/* Graph Section */}
+                <div 
+                    key={selectedPatient.email} 
+                    style={{ ...styles.glassCard, borderRadius: '30px', alignItems: 'stretch', padding: '20px' }}
+                >
+                    <div className="chart-header" style={{ marginBottom: '16px', display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                        <div>
+                            <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin:0, fontSize:'1rem', color:'#334155' }}>
+                                <Activity size={18} color="#0ea5e9"/> Recovery Trend
+                            </h4>
+                            <div style={{ display: 'flex', gap: '4px', marginTop: '8px' }}>
+                                <button style={styles.filterBtn(graphFilter === '7d')} onClick={() => setGraphFilter('7d')}>7 Days</button>
+                                <button style={styles.filterBtn(graphFilter === '30d')} onClick={() => setGraphFilter('30d')}>30 Days</button>
+                                <button style={styles.filterBtn(graphFilter === 'all')} onClick={() => setGraphFilter('all')}>All Time</button>
+                            </div>
+                        </div>
+                        <span className="acc-score" style={{ background: '#f0f9ff', color: '#0ea5e9', fontWeight:700 }}>
+                            {selectedPatient.completionRate}% Avg
+                        </span>
                     </div>
                     
-                    <div className="chart-box">
-                        {selectedPatient.accuracyTrend && selectedPatient.accuracyTrend.length > 0 ? (
+                    <div className="chart-box" style={{ height: '180px', width: '100%' }}>
+                        {graphData.length > 0 ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={selectedPatient.accuracyTrend}>
+                                <AreaChart data={graphData}>
+                                    <defs>
+                                        <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.4}/>
+                                            <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                                     <XAxis dataKey="name" hide />
                                     <YAxis hide domain={[0, 100]} />
                                     <Tooltip 
-                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                                        cursor={{ stroke: '#2C5D31', strokeWidth: 1 }}
+                                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                        cursor={{ stroke: '#0ea5e9', strokeWidth: 1 }}
+                                        formatter={(value) => [`${value}%`, "Accuracy"]}
                                     />
-                                    {/* Updated Line Style to Match Patient Daily Report (#2C5D31) */}
-                                    <Line 
+                                    <Area 
                                         type="monotone" 
                                         dataKey="val" 
-                                        stroke="#2C5D31" 
+                                        stroke="#0ea5e9" 
                                         strokeWidth={3} 
-                                        dot={{ r: 4, fill: '#2C5D31' }} 
-                                        activeDot={{ r: 6 }} 
+                                        fillOpacity={1} 
+                                        fill="url(#colorVal)" 
+                                        dot={{ r: 4, fill: '#0ea5e9', stroke: '#fff', strokeWidth: 2 }} 
+                                        activeDot={{ r: 6, stroke: '#0ea5e9', strokeWidth: 2 }}
+                                        animationDuration={1500} 
                                     />
-                                </LineChart>
+                                </AreaChart>
                             </ResponsiveContainer>
                         ) : (
-                           <div className="no-data-msg">Not enough session data yet.</div>
+                           <div className="no-data-msg" style={{display:'flex', alignItems:'center', justifyContent:'center', height:'100%', color:'#94a3b8', fontSize:'0.9rem'}}>
+                                No data for this period.
+                           </div>
                         )}
                     </div>
                     
-                    <div className="session-counter">
-                        <span>Completed Sessions</span>
-                        <strong>{selectedPatient.completedSessions} / {selectedPatient.assignedSessions}</strong>
+                    {/* ✅ DYNAMIC COUNT: Updates based on filter */}
+                    <div className="session-counter" style={{ marginTop: '12px', borderTop:'1px solid #f1f5f9', paddingTop:'12px', display:'flex', justifyContent:'space-between', fontSize:'0.9rem' }}>
+                        <span style={{color: '#64748b'}}>Completed Sessions</span>
+                        <strong style={{color: '#0f172a'}}>{graphData.length}</strong>
                     </div>
                 </div>
 
-                {/* 5. Footer Action */}
-                <button className="btn-full-record" onClick={() => navigate(`/therapist/patient-detail/${selectedPatient.email}`)}>
+                <button 
+                    className="btn-full-record" 
+                    onClick={() => navigate(`/therapist/patient-detail/${selectedPatient.email}`)}
+                    style={{ background: 'white', border: '1px solid #cbd5e1', borderRadius: '25px' }}
+                >
                     <FileText size={16}/> View Full Medical Record
                 </button>
 

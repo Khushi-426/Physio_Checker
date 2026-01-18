@@ -714,41 +714,64 @@ def google_auth():
 @app.route("/api/therapist/patients", methods=["GET"])
 def therapist_patients():
     if users_collection is None: return jsonify({"patients": []}), 200
+    
     patients = list(users_collection.find(
         {"role": "patient"}, 
         {"_id": 0, "name": 1, "email": 1, "created_at": 1, "age": 1, "weight": 1, "bloodGroup": 1}
     ))
     
     enriched = []
-    one_day_ago = time.time() - 86400 
+    
     for p in patients:
-        last = sessions_collection.find_one({"email": p["email"]}, sort=[("timestamp", -1)])
-        status = "Normal"
-        last_session_ts = None
-        recent_activity_type = None
-        if last:
-            last_session_ts = last.get("timestamp")
-            reps = last.get("total_reps", 0)
-            errors = last.get("total_errors", 0)
-            accuracy = max(0, 100 - int((errors / max(reps, 1)) * 20)) if reps > 0 else 0
-            if accuracy < 60: status = "High Risk"
-            elif accuracy < 80: status = "Alert"
-            if last_session_ts and last_session_ts > one_day_ago:
-                recent_activity_type = "Session Completed"
+        email = p.get("email")
         
+        # Fetch all sessions sorted by time
+        sessions = list(sessions_collection.find({"email": email}).sort("timestamp", 1))
+        
+        completed_count = len(sessions)
+        accuracy_trend = [] # List of objects {val, ts}
+        total_quality = 0
+        last_session_ts = None
+        
+        if completed_count > 0:
+            last_session_ts = sessions[-1].get("timestamp")
+            
+            for s in sessions:
+                q = s.get("qualityScore", 0)
+                ts = s.get("timestamp", 0)
+                # ✅ Append object with timestamp for filtering
+                accuracy_trend.append({"val": q, "ts": ts})
+                total_quality += q
+                
+            avg_accuracy = int(total_quality / completed_count)
+        else:
+            avg_accuracy = 0
+
+        status = "Normal"
+        if completed_count > 0:
+            # Check last available score
+            last_acc = accuracy_trend[-1]["val"]
+            if last_acc < 60: status = "High Risk"
+            elif last_acc < 80: status = "Alert"
+            
         enriched.append({
-            "id": str(p["email"]), 
+            "id": str(email),
             "name": p.get("name", "Unknown"),
-            "email": p["email"],
+            "email": email,
             "age": p.get("age", "--"),
             "weight": p.get("weight", "--"),
             "bloodGroup": p.get("bloodGroup", "--"),
             "date_joined": datetime.fromtimestamp(p.get("created_at", time.time())).strftime("%Y-%m-%d"),
             "status": status,
-            "last_session_ts": last_session_ts,
-            "recent_activity": recent_activity_type, 
+            "last_session_ts": last_session_ts, # Raw timestamp (seconds)
+            
+            "accuracyTrend": accuracy_trend, # ✅ Now includes timestamps
+            "completionRate": avg_accuracy,
+            "completedSessions": completed_count,
+            "assignedSessions": 20, 
             "hasActiveProtocol": False 
         })
+        
     return jsonify({"patients": enriched}), 200
 
 @app.route("/api/therapist/notifications", methods=["GET"])
