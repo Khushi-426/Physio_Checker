@@ -5,16 +5,15 @@ const auth = require('../middleware/auth');
 const Protocol = require('../models/Protocol');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
-// const { createNotification } = require('../utils/notify'); // use later if needed
 
 // POST /api/protocols/assign
 router.post('/assign', auth, async (req, res) => {
-  const { patientId, sets, reps, difficulty } = req.body;
+  const { patientId, sets, reps, difficulty, exerciseName } = req.body;
 
-  if (!patientId || !sets || !reps || !difficulty) {
+  if (!patientId || !sets || !reps || !difficulty || !exerciseName) {
     return res
       .status(400)
-      .json({ message: 'patientId, sets, reps, difficulty are required.' });
+      .json({ message: 'patientId, sets, reps, difficulty, and exerciseName are required.' });
   }
 
   try {
@@ -24,8 +23,12 @@ router.post('/assign', auth, async (req, res) => {
     }
 
     // deactivate previous active protocol for this patient & therapist
+    // Note: If you want to allow multiple different exercises assigned simultaneously, 
+    // you might want to only deactivate if the exerciseName matches. 
+    // For now, keeping your original logic which seems to deactivate ANY previous protocol.
+    // If you want to support multiple active exercises, consider removing this block or making it specific to exerciseName.
     await Protocol.updateMany(
-      { patient: patientId, therapist: req.user.id, isActive: true },
+      { patient: patientId, therapist: req.user.id, isActive: true, exerciseName: exerciseName },
       { isActive: false }
     );
 
@@ -35,27 +38,25 @@ router.post('/assign', auth, async (req, res) => {
       sets,
       reps,
       difficulty,
-      exerciseName: 'SingleExercise'
+      exerciseName: exerciseName // Dynamically set from request
     });
 
     await protocol.save();
 
-    // Create notification (single place, inside try, after save)
+    // Create notification
     await Notification.create({
       therapist: req.user.id,
       patient: patientId,
       type: 'PROTOCOL_ASSIGNED',
-      message: `New protocol assigned: ${protocol.sets}x${protocol.reps} (${protocol.difficulty}).`,
+      message: `New protocol assigned: ${exerciseName} - ${protocol.sets}x${protocol.reps} (${protocol.difficulty}).`,
       metadata: {
         protocolId: protocol._id,
+        exerciseName: exerciseName,
         sets: protocol.sets,
         reps: protocol.reps,
         difficulty: protocol.difficulty
       }
     });
-
-    // If you later want to use a helper:
-    // await createNotification({ therapistId: req.user.id, patientId, type: 'PROTOCOL_ASSIGNED', ... });
 
     return res
       .status(201)
@@ -73,17 +74,18 @@ router.get('/patient/:patientId', auth, async (req, res) => {
   const { patientId } = req.params;
 
   try {
-    const protocol = await Protocol.findOne({
+    // Return all active protocols for this patient
+    const protocols = await Protocol.find({
       patient: patientId,
       therapist: req.user.id,
       isActive: true
     });
 
-    if (!protocol) {
-      return res.status(404).json({ message: 'No active protocol for this patient.' });
+    if (!protocols || protocols.length === 0) {
+      return res.status(404).json({ message: 'No active protocols for this patient.' });
     }
 
-    return res.json(protocol);
+    return res.json(protocols);
   } catch (err) {
     console.error('Get protocol error:', err);
     return res.status(500).json({ message: 'Server error fetching protocol.' });

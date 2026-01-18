@@ -22,6 +22,15 @@ const MUSCLE_EXERCISE_MAP = {
       defaultSets: 3, 
       defaultReps: 12,
       description: 'Overhead press to build deltoid strength.'
+    },
+    { 
+      id: 'lateral_raise', 
+      name: 'Lateral Raise', 
+      difficulty: 'Intermediate', 
+      type: 'Isolation', 
+      defaultSets: 3, 
+      defaultReps: 12,
+      description: 'Isolation exercise to develop the side deltoids for wider shoulders.'
     }
   ],
   arms: [
@@ -146,8 +155,7 @@ const TherapistAssignmentManager = () => {
   // Initialize patient from direct navigation
   const [selectedPatient, setSelectedPatient] = useState(location.state?.selectedPatient || null);
   
-  // ✅ NEW: Track if we came directly from Dashboard (Direct Mode)
-  // This state is set once on mount and persists
+  // Track if we came directly from Dashboard (Direct Mode)
   const [isDirectMode] = useState(!!location.state?.selectedPatient);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -200,8 +208,10 @@ const TherapistAssignmentManager = () => {
     setAssignedExercises(prev => [...prev, newAssignment]);
     
     try {
-      await axios.post(`${API_BASE}/assign`, { 
-        patientEmail: selectedPatient.email, 
+      // Corrected Route: /api/protocols/assign
+      // Corrected Payload: Sending patientId instead of email
+      await axios.post(`${API_BASE}/protocols/assign`, { 
+        patientId: selectedPatient._id, // Ensure your patient object has _id
         exerciseName: exercise.name, 
         sets: parseInt(config.sets),
         reps: parseInt(config.reps),
@@ -215,16 +225,10 @@ const TherapistAssignmentManager = () => {
     }
   };
 
-  // ✅ UPDATED BACK HANDLER
   const handleBack = () => {
-    // If we are in "Direct Mode" (from Dashboard) OR currently have no patient selected (root of directory)
-    // -> Go to Dashboard
     if (isDirectMode || !selectedPatient) {
         navigate('/therapist-dashboard');
-    } 
-    // If we are in "Directory Mode" AND have a patient selected
-    // -> Go back to the Directory List
-    else {
+    } else {
         setSelectedPatient(null);
         setActiveMuscle(null);
         setView('front');
@@ -242,7 +246,6 @@ const TherapistAssignmentManager = () => {
     return result.sort((a, b) => new Date(b.date_joined) - new Date(a.date_joined)).slice(0, 6);
   }, [patients, searchQuery]);
 
-  // Loading Logic: Only block if we don't have a patient selected (Direct Mode skips this)
   if (loading && !selectedPatient) return <div style={styles.loadingState}>Loading Clinical Records...</div>;
 
   return (
@@ -253,7 +256,6 @@ const TherapistAssignmentManager = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <button onClick={handleBack} style={styles.backButton}>
             <ChevronRight style={{ transform: 'rotate(180deg)' }} size={20}/> 
-            {/* ✅ DYNAMIC LABEL: Shows 'Dashboard' if in Direct Mode */}
             {(selectedPatient && !isDirectMode) ? 'Back to Directory' : 'Dashboard'}
           </button>
           
@@ -402,7 +404,7 @@ const TherapistAssignmentManager = () => {
         )}
       </main>
 
-      {/* ✅ NOTIFICATION TOAST OVERLAY */}
+      {/* NOTIFICATION TOAST OVERLAY */}
       <AnimatePresence>
         {notification && (
             <NotificationToast 
