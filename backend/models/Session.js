@@ -19,7 +19,7 @@ const sessionSchema = new mongoose.Schema({
     required: true 
   },
   
-  // --- New Data Fields ---
+  // --- Data Fields ---
   exerciseType: { 
     type: String, 
     default: 'Standard Exercise' 
@@ -37,19 +37,29 @@ const sessionSchema = new mongoose.Schema({
     default: 0 
   },
   
-  // Main Accuracy (Average of left/right if available)
+  // Main Accuracy
   qualityScore: { 
     type: Number, 
     min: 0, 
     max: 100 
   },
+
+  // NEW: Facial Fatigue Index
+  ffi: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100
+  },
   
-  // Detailed Metrics (e.g., Left vs Right Hand)
+  // Detailed Metrics
   metrics: {
     leftAccuracy: { type: Number },
     rightAccuracy: { type: Number },
-    maxRom: { type: Number }, // Range of Motion
-    minRom: { type: Number }
+    leftErrors: { type: Number, default: 0 },
+    rightErrors: { type: Number, default: 0 },
+    leftReps: { type: Number, default: 0 },
+    rightReps: { type: Number, default: 0 }
   },
 
   completed: { 

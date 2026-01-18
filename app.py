@@ -1,6 +1,6 @@
 """
 Flask application with API routes - THREADING MODE (No Eventlet)
-INTEGRATED WITH: MongoDB, Ghost Toggle, Smart AI Coach, Streaming, and Accuracy Tracking
+INTEGRATED WITH: MongoDB, Ghost Toggle, Smart AI Coach, Streaming, Accuracy Tracking, and FFI
 """
 from flask import Flask, Response, jsonify, request, render_template
 import cv2
@@ -77,7 +77,6 @@ sessions_collection = None
 exercises_collection = None
 protocols_collection = None
 notifications_collection = None
-checkins_collection = None  # ✅ NEW COLLECTION
 
 try:
     print("⏳ Attempting to connect to MongoDB...")
@@ -97,7 +96,6 @@ try:
     exercises_collection = db["exercises"]
     protocols_collection = db["protocols"]
     notifications_collection = db["notifications"]
-    checkins_collection = db["checkins"] # ✅ Init Checkins
 
     print(f"✅ Connected to MongoDB Cloud: {DB_NAME}")
 except Exception as e:
@@ -284,18 +282,28 @@ def handle_stop_session(data):
             workout_session = None 
 
         if email and sessions_collection is not None:
+            # Extract detailed metrics
             r = last_session_report["summary"]["RIGHT"]
             l = last_session_report["summary"]["LEFT"]
+            
             total_reps = r["total_reps"] + l["total_reps"]
             
-            if total_reps == 0:
-                print(f"⚠️ Session skipped for {email}: 0 reps performed.")
+            # --- VALIDATION: PREVENT EMPTY SESSIONS ---
+            duration = last_session_report.get("duration", 0)
+            if total_reps == 0 and duration < 10:
+                print(f"⚠️ Session skipped for {email}: Insufficient activity.")
                 emit("session_stopped", {"status": "success", "message": "No reps, session not saved."})
                 return
 
-            duration = last_session_report.get("duration", 0) 
+            # --- METRICS CALCULATION ---
+            # Uses average accuracy calculated from actual ROM of each rep
             avg_accuracy = last_session_report.get("average_accuracy", 0)
+            
+            # --- FFI INTEGRATION ---
+            # Extract Facial Fatigue Index from report
+            ffi_score = last_session_report.get("ffi", 0)
 
+            # Save to MongoDB
             session_doc = {
                 "email": email,
                 "exerciseType": exercise, 
@@ -305,6 +313,7 @@ def handle_stop_session(data):
                 "duration": duration,
                 "reps": total_reps,
                 "qualityScore": int(avg_accuracy),
+                "ffi": ffi_score, # <--- SAVING FFI TO DB
                 "completed": True,
                 "metrics": {
                     "leftErrors": l.get("error_count", 0),
@@ -313,8 +322,9 @@ def handle_stop_session(data):
                     "rightReps": r["total_reps"]
                 }
             }
+            
             sessions_collection.insert_one(session_doc)
-            print(f"✅ Session saved for {email}: {total_reps} reps, {int(avg_accuracy)}% accuracy")
+            print(f"✅ Session saved for {email}: {total_reps} reps, Acc: {int(avg_accuracy)}%, FFI: {ffi_score}%")
 
         emit("session_stopped", {"status": "success"})
     except Exception as e:
@@ -333,40 +343,6 @@ def handle_toggle_listening(data):
 # 6. API ROUTES
 # ----------------------------------------------------
 
-# ✅ NEW ROUTE: Patient Daily Check-in
-@app.route("/api/user/checkin", methods=["POST"])
-def patient_checkin():
-    if checkins_collection is None: return jsonify({"error": "DB unavailable"}), 503
-    
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    fatigue = data.get("fatigue")
-    pain = data.get("painLevel") # Matches frontend 'painLevel'
-    
-    if not email: return jsonify({"error": "Email required"}), 400
-
-    new_checkin = {
-        "email": email,
-        "fatigue": fatigue,
-        "pain": pain,
-        "timestamp": time.time(),
-        "date_str": datetime.now().strftime("%Y-%m-%d")
-    }
-    
-    checkins_collection.insert_one(new_checkin)
-    return jsonify({"status": "success", "message": "Check-in received"}), 200
-
-# ✅ ROUTE: Checkin History
-@app.route("/api/user/checkin_history", methods=["GET"])
-def get_checkin_history():
-    if checkins_collection is None: return jsonify([]), 200
-    email = request.args.get("email")
-    if not email: return jsonify({"error": "Email required"}), 400
-    
-    history = list(checkins_collection.find({"email": email}).sort("timestamp", -1).limit(7))
-    for h in history: h["_id"] = str(h["_id"])
-    return jsonify(history), 200
-
 # --- AUTH & USER ROUTES ---
 
 @app.route("/api/user/profile/get", methods=["POST"])
@@ -374,8 +350,11 @@ def get_user_profile():
     data = request.get_json(silent=True) or {}
     email = data.get("email")
 
-    if not email: return jsonify({"error": "Email is required"}), 400
-    if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+    
+    if users_collection is None:
+        return jsonify({"error": "Database unavailable"}), 503
 
     try:
         user = users_collection.find_one({"email": email}, {"_id": 0, "password": 0, "otp": 0})
@@ -398,8 +377,11 @@ def update_user_profile():
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     
-    if not email: return jsonify({"error": "Email is required"}), 400
-    if users_collection is None: return jsonify({"error": "Database unavailable"}), 503
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+
+    if users_collection is None:
+        return jsonify({"error": "Database unavailable"}), 503
 
     update_fields = {}
     if "name" in data: update_fields["name"] = data["name"]
@@ -420,10 +402,15 @@ def update_user_profile():
         logger.error(f"Update Profile Error: {e}")
         return jsonify({"error": "Internal Error"}), 500
 
+
 # --- EXERCISE & PROTOCOL ROUTES ---
 
 @app.route("/api/assign", methods=["POST"])
 def assign_exercise():
+    """
+    Therapist assigns an exercise to a patient.
+    Stores sets, reps, duration (days), and difficulty.
+    """
     if protocols_collection is None or users_collection is None: 
         return jsonify({"error": "Database unavailable"}), 503
         
@@ -435,13 +422,16 @@ def assign_exercise():
         return jsonify({"error": "Missing fields"}), 400
         
     patient = users_collection.find_one({"email": patient_email})
-    if not patient: return jsonify({"error": "Patient not found"}), 404
+    if not patient: 
+        return jsonify({"error": "Patient not found"}), 404
     
+    # Defaults if not provided
     sets = data.get("sets", 3)
     reps = data.get("reps", 10)
     difficulty = data.get("difficulty", "Medium")
-    duration = data.get("duration", 14) 
+    duration = data.get("duration", 14) # Days
     
+    # Find a therapist to link (Mock or Actual)
     therapist = users_collection.find_one({"role": "therapist"})
     therapist_id = therapist["_id"] if therapist else patient["_id"] 
     
@@ -458,6 +448,7 @@ def assign_exercise():
         "updatedAt": datetime.now()
     }
     
+    # Upsert: Update if exists, otherwise Insert
     protocols_collection.update_one(
         {"patient": patient["_id"], "exerciseName": exercise_name},
         {"$set": protocol_doc},
@@ -472,10 +463,16 @@ def assign_exercise():
 
 @app.route("/api/exercises", methods=["GET"])
 def get_exercises():
+    """
+    Returns list of exercises.
+    If 'email' is provided, marks assigned exercises as recommended
+    AND overrides defaults with assigned sets/reps.
+    """
     try:
         base_list = _get_frontend_exercise_list()
         email = request.args.get('email')
-        assigned_map = {} 
+        
+        assigned_map = {} # Store protocol details keyed by normalized exercise name
 
         if email and users_collection is not None and protocols_collection is not None:
             try:
@@ -484,6 +481,8 @@ def get_exercises():
                     protocols = protocols_collection.find({"patient": user["_id"], "isActive": True})
                     for p in protocols:
                         ex_name_db = p.get("exerciseName", "")
+                        
+                        # Normalize for matching
                         key = ""
                         if "bicep" in ex_name_db.lower(): key = "Bicep Curl"
                         elif "shoulder" in ex_name_db.lower(): key = "Shoulder Press"
@@ -501,6 +500,7 @@ def get_exercises():
             except Exception as db_err: 
                 print(f"Error fetching protocols: {db_err}")
 
+        # Merge Data
         for ex in base_list:
             if ex["title"] in assigned_map: 
                 ex["recommended"] = True
@@ -511,6 +511,7 @@ def get_exercises():
                     "difficulty": details["difficulty"],
                     "days": details["duration"]
                 }
+                # Update display string
                 ex["duration"] = f"{details['sets']} Sets • {details['reps']} Reps"
                 ex["difficulty"] = details["difficulty"]
             else: 
@@ -543,6 +544,7 @@ def get_session_history():
                 "exerciseType": doc.get("exerciseType", doc.get("exercise", "Unknown")),
                 "reps": doc.get("reps", doc.get("total_reps", 0)),
                 "qualityScore": doc.get("qualityScore", 0),
+                "ffi": doc.get("ffi", 0),  # <--- RETURN FFI TO FRONTEND
                 "duration": doc.get("duration", 0),
                 "performedAt": doc.get("timestamp", 0) * 1000, 
                 "completed": doc.get("completed", True),
@@ -551,98 +553,6 @@ def get_session_history():
         return jsonify(sessions), 200
     except Exception as e:
         return jsonify({"error": "Failed to fetch history"}), 500
-
-# ✅ UPDATED: THERAPIST PATIENTS LIST (Includes Latest Check-in)
-@app.route("/api/therapist/patients", methods=["GET"])
-def therapist_patients():
-    if users_collection is None: return jsonify({"patients": []}), 200
-    
-    patients = list(users_collection.find(
-        {"role": "patient"}, 
-        {"_id": 0, "name": 1, "email": 1, "created_at": 1, "age": 1, "weight": 1, "bloodGroup": 1}
-    ))
-    
-    enriched = []
-    
-    for p in patients:
-        email = p.get("email")
-        
-        # 1. Fetch Sessions
-        sessions = list(sessions_collection.find({"email": email}).sort("timestamp", 1))
-        
-        # 2. ✅ Fetch Latest Daily Check-in
-        latest_checkin = checkins_collection.find_one(
-            {"email": email}, 
-            sort=[("timestamp", -1)]
-        )
-        
-        daily_report = None
-        if latest_checkin:
-            daily_report = {
-                "fatigue": latest_checkin.get("fatigue", "None"),
-                "pain": latest_checkin.get("pain", 0),
-                "timestamp": latest_checkin.get("timestamp", 0)
-            }
-
-        # 3. Calculate Stats
-        completed_count = len(sessions)
-        accuracy_trend = []
-        total_quality = 0
-        last_session_ts = None
-        
-        if completed_count > 0:
-            last_session_ts = sessions[-1].get("timestamp")
-            for s in sessions:
-                q = s.get("qualityScore", 0)
-                ts = s.get("timestamp", 0)
-                # ✅ Append object with timestamp for filtering
-                accuracy_trend.append({"val": q, "ts": ts})
-                total_quality += q
-            avg_accuracy = int(total_quality / completed_count)
-        else:
-            avg_accuracy = 0
-
-        status = "Normal"
-        if completed_count > 0:
-            last_acc = accuracy_trend[-1]["val"] if accuracy_trend else 0
-            if last_acc < 60: status = "High Risk"
-            elif last_acc < 80: status = "Alert"
-            
-        enriched.append({
-            "id": str(email),
-            "name": p.get("name", "Unknown"),
-            "email": email,
-            "age": p.get("age", "--"),
-            "weight": p.get("weight", "--"),
-            "bloodGroup": p.get("bloodGroup", "--"),
-            "date_joined": datetime.fromtimestamp(p.get("created_at", time.time())).strftime("%Y-%m-%d"),
-            "status": status,
-            "last_session_ts": last_session_ts,
-            
-            "accuracyTrend": accuracy_trend, # ✅ Now includes timestamps
-            "completionRate": avg_accuracy,
-            "completedSessions": completed_count,
-            "assignedSessions": 20, 
-            "hasActiveProtocol": False,
-            "dailyCheckin": daily_report # ✅ Added here
-        })
-        
-    return jsonify({"patients": enriched}), 200
-
-@app.route("/api/therapist/notifications", methods=["GET"])
-def therapist_notifications():
-    if notifications_collection is None: return jsonify([]), 200
-    notifs = list(notifications_collection.find({}).sort("timestamp", -1).limit(10))
-    response = []
-    for n in notifs:
-        response.append({
-            "id": str(n.get("_id")),
-            "type": n.get("type", "Info"),
-            "title": n.get("title", "System"),
-            "message": n.get("message", ""),
-            "time": n.get("time", "Recently")
-        })
-    return jsonify(response), 200
 
 @app.route("/api/user/analytics_detailed", methods=["POST"])
 def analytics_detailed():
@@ -804,6 +714,61 @@ def google_auth():
             }), 200
     except Exception as e:
         return jsonify({"error": "Internal Server Error"}), 500
+
+@app.route("/api/therapist/patients", methods=["GET"])
+def therapist_patients():
+    if users_collection is None: return jsonify({"patients": []}), 200
+    patients = list(users_collection.find(
+        {"role": "patient"}, 
+        {"_id": 0, "name": 1, "email": 1, "created_at": 1, "age": 1, "weight": 1, "bloodGroup": 1}
+    ))
+    
+    enriched = []
+    one_day_ago = time.time() - 86400 
+    for p in patients:
+        last = sessions_collection.find_one({"email": p["email"]}, sort=[("timestamp", -1)])
+        status = "Normal"
+        last_session_ts = None
+        recent_activity_type = None
+        if last:
+            last_session_ts = last.get("timestamp")
+            reps = last.get("total_reps", 0)
+            errors = last.get("total_errors", 0)
+            accuracy = max(0, 100 - int((errors / max(reps, 1)) * 20)) if reps > 0 else 0
+            if accuracy < 60: status = "High Risk"
+            elif accuracy < 80: status = "Alert"
+            if last_session_ts and last_session_ts > one_day_ago:
+                recent_activity_type = "Session Completed"
+        
+        enriched.append({
+            "id": str(p["email"]), 
+            "name": p.get("name", "Unknown"),
+            "email": p["email"],
+            "age": p.get("age", "--"),
+            "weight": p.get("weight", "--"),
+            "bloodGroup": p.get("bloodGroup", "--"),
+            "date_joined": datetime.fromtimestamp(p.get("created_at", time.time())).strftime("%Y-%m-%d"),
+            "status": status,
+            "last_session_ts": last_session_ts,
+            "recent_activity": recent_activity_type, 
+            "hasActiveProtocol": False 
+        })
+    return jsonify({"patients": enriched}), 200
+
+@app.route("/api/therapist/notifications", methods=["GET"])
+def therapist_notifications():
+    if notifications_collection is None: return jsonify([]), 200
+    notifs = list(notifications_collection.find({}).sort("timestamp", -1).limit(10))
+    response = []
+    for n in notifs:
+        response.append({
+            "id": str(n.get("_id")),
+            "type": n.get("type", "Info"),
+            "title": n.get("title", "System"),
+            "message": n.get("message", ""),
+            "time": n.get("time", "Recently")
+        })
+    return jsonify(response), 200
 
 @app.route("/start_tracking", methods=["POST", "OPTIONS"])
 def start_tracking():

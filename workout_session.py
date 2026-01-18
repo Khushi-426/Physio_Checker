@@ -1,11 +1,11 @@
-# workout_session.py
 """
-Main workout session manager - OPTIMIZED FOR SQUATS AND LEG EXERCISES
+Main workout session manager - OPTIMIZED WITH FFI & STRICT TEMPORAL FILTER
 """
 import cv2
 import mediapipe as mp
 import numpy as np
 import time
+import threading 
 from typing import Tuple, Optional
 from collections import deque
 
@@ -20,6 +20,7 @@ mp_holistic = mp.solutions.holistic
 from models import ArmMetrics, CalibrationData, SessionHistory, GhostPose, Landmark2D 
 from ai_engine import AIEngine
 from exercise_verifier import ExerciseVerifier
+from constants import FATIGUE_THRESHOLDS 
 
 class WorkoutSession:
     def __init__(self, exercise_name: str = "Bicep Curl"):
@@ -32,7 +33,8 @@ class WorkoutSession:
         from calibration import CalibrationManager
         from rep_counter import RepCounter
         
-        # --- ROBUST EXERCISE LOOKUP ---
+        self.lock = threading.Lock() 
+
         config = EXERCISE_PRESETS.get(exercise_name)
         if not config:
             config = EXERCISE_PRESETS.get(exercise_name.rstrip('s'))
@@ -85,6 +87,15 @@ class WorkoutSession:
         self.wrong_exercise_detected = False
         self.wrong_exercise_reason = ""
 
+        # --- FATIGUE & FFI TRACKING (STRICT) ---
+        self.last_fatigue_alert = 0.0
+        self.fatigue_frames_count = 0
+        self.total_frames_count = 0
+        self.active_phase_start_time = 0.0
+        
+        # New: Temporal History Buffer for Fatigue
+        self.fatigue_history = deque(maxlen=FATIGUE_THRESHOLDS["HISTORY_WINDOW"])
+
         self.ghost_connections = [
             (mp_pose_lm.RIGHT_SHOULDER.value, mp_pose_lm.RIGHT_ELBOW.value), 
             (mp_pose_lm.RIGHT_ELBOW.value, mp_pose_lm.RIGHT_WRIST.value),
@@ -102,10 +113,9 @@ class WorkoutSession:
             (mp_pose_lm.NOSE.value, mp_pose_lm.LEFT_SHOULDER.value),
         ]
         self.ghost_pose = GhostPose(instruction="Initializing...", connections=self.ghost_connections)
-        
-        self._frames_in_active = 0 
-        self.gesture_active_until = 0.0 
-        self.gesture_hold_duration = 2.0 
+        self.gesture_active_until = 0.0
+        self.gesture_detected = False
+        self._frames_in_active = 0
     
     def start(self):
         from constants import WorkoutPhase
@@ -124,6 +134,13 @@ class WorkoutSession:
         self.wrong_exercise_counter = 0
         self.wrong_exercise_detected = False
         self.wrong_exercise_reason = ""
+        
+        # Reset Fatigue Counters
+        self.last_fatigue_alert = 0.0
+        self.fatigue_frames_count = 0
+        self.total_frames_count = 0
+        self.active_phase_start_time = 0.0
+        self.fatigue_history.clear()
 
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -141,21 +158,36 @@ class WorkoutSession:
     
     def stop(self):
         from constants import WorkoutPhase
-        if self.cap is not None: self.cap.release()
-        if self.holistic_model is not None: self.holistic_model.close()
-        self.holistic_model = None
-        self.phase = WorkoutPhase.INACTIVE
+        # --- THREAD SAFE STOP ---
+        with self.lock:
+            self.phase = WorkoutPhase.INACTIVE
+            if self.cap is not None: 
+                self.cap.release()
+                self.cap = None 
+            if self.holistic_model is not None: 
+                self.holistic_model.close()
+                self.holistic_model = None
 
     def process_frame(self) -> Tuple[Optional[np.ndarray], bool]:
         from constants import WorkoutPhase
-        if self.cap is None or not self.cap.isOpened(): return None, False
-        success, image = self.cap.read()
-        if not success: return None, False
+        
+        # --- THREAD SAFE READ ---
+        with self.lock:
+            if self.phase == WorkoutPhase.INACTIVE or self.cap is None or not self.cap.isOpened():
+                return None, False
+            success, image = self.cap.read()
+            if not success: 
+                return None, False
+
         image = cv2.flip(image, 1) 
 
         image.flags.writeable = False
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Check model existence safely
+        if self.holistic_model is None: return None, False
         results = self.holistic_model.process(image)
+        
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
@@ -176,6 +208,7 @@ class WorkoutSession:
             STABILIZATION_FRAMES = 5 
             if self._frames_in_active < STABILIZATION_FRAMES:
                 self._frames_in_active += 1
+                self.active_phase_start_time = current_time # Set start time
             else:
                 self._process_workout(results, current_time)
 
@@ -216,6 +249,10 @@ class WorkoutSession:
 
     def _process_workout(self, results, current_time: float):
         from constants import ArmStage 
+        
+        # 1. INCREMENT TOTAL FRAMES (For FFI Denominator)
+        self.total_frames_count += 1
+        
         if not results.pose_landmarks:
             self.ghost_pose.instruction = "Please step into view"
             return
@@ -238,8 +275,9 @@ class WorkoutSession:
             self.arm_metrics['LEFT'].feedback = warning_msg
             self.arm_metrics['RIGHT'].feedback_color = "RED"
             self.arm_metrics['LEFT'].feedback_color = "RED"
-            self.rep_counter.count_error('RIGHT', current_time)
-            self.rep_counter.count_error('LEFT', current_time)
+            # Count errors globally if wrong exercise
+            self.rep_counter.count_error_state_based('RIGHT', "RED")
+            self.rep_counter.count_error_state_based('LEFT', "RED")
             return 
 
         if (current_time - self.last_ai_check) > self.ai_interval:
@@ -251,6 +289,39 @@ class WorkoutSession:
         # --- EXERCISE TYPE DETECTION ---
         is_squat = "squat" in self.exercise_config.name.lower()
         is_knee_lift = "knee" in self.exercise_config.name.lower() or "lift" in self.exercise_config.name.lower()
+        
+        # --- STRICT FATIGUE DETECTION (TEMPORAL FILTERING) ---
+        
+        # 1. Grace period: Ignore first 3.0 seconds
+        is_in_grace_period = (current_time - self.active_phase_start_time) < 3.0
+        
+        is_grimacing_raw = False
+        if not is_in_grace_period and results.face_landmarks:
+            is_grimacing_raw = self.pose_processor.check_fatigue_face(results.face_landmarks)
+
+        # 2. Add to History Buffer
+        self.fatigue_history.append(is_grimacing_raw)
+        
+        # 3. Calculate SUSTAINED FATIGUE
+        # Only True if user is grimacing for >80% of the window (e.g. 16/20 frames)
+        sustained_fatigue = False
+        if len(self.fatigue_history) == self.fatigue_history.maxlen:
+            if sum(self.fatigue_history) >= FATIGUE_THRESHOLDS["TRIGGER_COUNT"]:
+                sustained_fatigue = True
+
+        # 4. Update FFI Counter (Progress Bar)
+        # We ONLY increment the counter if fatigue is SUSTAINED. 
+        # This makes the bar very strict/stable.
+        if sustained_fatigue:
+            self.fatigue_frames_count += 1
+
+        # 5. Trigger UI Alert
+        # We use 'sustained_fatigue' here too, so the alert matches the bar logic
+        fatigue_triggered = False
+        if sustained_fatigue and (current_time - self.last_fatigue_alert) > FATIGUE_THRESHOLDS["COOLDOWN"]:
+            fatigue_triggered = True
+            self.last_fatigue_alert = current_time
+            print("🚀 SUSTAINED FATIGUE ALERT TRIGGERED")
 
         for arm in ['RIGHT', 'LEFT']:
             if angles[arm] is not None:
@@ -260,17 +331,14 @@ class WorkoutSession:
                 # --- SQUAT LOGIC ---
                 if is_squat:
                     depth_pct = self.pose_processor.calculate_depth_percentage(angles[arm])
-                    self.arm_metrics[arm].angle = depth_pct * 1.8 # Map to progress bar
+                    self.arm_metrics[arm].angle = depth_pct * 1.8 
                     if self.arm_metrics[arm].feedback_color == "GREEN":
                          if depth_pct >= 100: self.arm_metrics[arm].feedback = "Excellent!"
                          else: self.arm_metrics[arm].feedback = "Good"
 
-                # --- KNEE LIFT LOGIC (NEW) ---
+                # --- KNEE LIFT LOGIC ---
                 elif is_knee_lift:
-                    # Calculate Lift % based on Hip Angle
                     lift_pct = self.pose_processor.calculate_lift_percentage(angles[arm])
-                    # Map to progress bar (100% = full bar)
-                    # Frontend expects (angle/180)*100. So set angle = lift_pct * 1.8
                     self.arm_metrics[arm].angle = lift_pct * 1.8
                     
                     if self.arm_metrics[arm].feedback_color == "GREEN":
@@ -290,6 +358,13 @@ class WorkoutSession:
                     # Critical Errors
                     if any(x in self.arm_metrics[arm].feedback for x in ["Stop!", "Push Knees", "Keep Chest", "Lean Back", "Stand Tall"]):
                         self.arm_metrics[arm].feedback_color = "RED"
+                
+                # --- FATIGUE OVERRIDE (High Priority) ---
+                if fatigue_triggered:
+                    if self.arm_metrics[arm].feedback_color != "RED":
+                        self.arm_metrics[arm].feedback = "Fatigue Detected: Take a Rest"
+                        self.arm_metrics[arm].feedback_color = "YELLOW"
+                        self.rep_counter.color_lock_until[arm] = current_time + 2.0
 
         if results.pose_landmarks:
              self._calculate_ideal_pose_realtime(results.pose_landmarks.landmark)
@@ -412,11 +487,17 @@ class WorkoutSession:
         avg_acc = sum(all_accs) / len(all_accs) if all_accs else 0
         r_err = self.rep_counter.feedback_error_counts['RIGHT']
         l_err = self.rep_counter.feedback_error_counts['LEFT']
+        
+        # FFI Calculation
+        ffi_score = 0
+        if self.total_frames_count > 0:
+            ffi_score = round((self.fatigue_frames_count / self.total_frames_count) * 100, 1)
 
         return {
             'exercise_name': self.exercise_config.name, 
             'duration': round(self.history.time[-1] if self.history.time else 0, 2),
-            'average_accuracy': avg_acc,
+            'average_accuracy': int(avg_acc),
+            'ffi': ffi_score, # Passed to frontend
             'summary': {
                 'RIGHT': {'total_reps': self.arm_metrics['RIGHT'].rep_count, 'error_count': r_err},
                 'LEFT': {'total_reps': self.arm_metrics['LEFT'].rep_count, 'error_count': l_err}

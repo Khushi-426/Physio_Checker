@@ -40,6 +40,9 @@ class RepCounter:
         self.rep_accuracies = {'RIGHT': [], 'LEFT': []}
         self.feedback_error_counts = {'RIGHT': 0, 'LEFT': 0}
         
+        # ERROR STATE TRACKING (Rising Edge Detection)
+        self.in_error_state = {'RIGHT': False, 'LEFT': False}
+        
         # Compliments
         self.compliments = [
             "Perfect Form!", 
@@ -54,27 +57,38 @@ class RepCounter:
 
     def _calculate_rep_accuracy(self, arm):
         """Calculates 0-100% accuracy based on calibrated range of motion"""
-        cal_ext = self.calibration.extended_threshold
-        cal_con = self.calibration.contracted_threshold
+        cal_ext = self.calibration.extended_thresholds[arm]
+        cal_con = self.calibration.contracted_thresholds[arm]
         cal_range = abs(cal_ext - cal_con)
         
         if cal_range == 0: return 100
         
         user_range = abs(self.rep_max_angle[arm] - self.rep_min_angle[arm])
-        accuracy = (user_range / cal_range) * 100
-        return min(100, int(accuracy))
+        
+        # Calculate deviation magnitude
+        deviation = abs(user_range - cal_range)
+        
+        # Calculate percentage error relative to expected range
+        percent_error = (deviation / cal_range) * 100
+        
+        # Accuracy is 100 minus the error
+        accuracy = max(0, 100 - percent_error)
+        
+        return int(accuracy)
 
-    def count_error(self, arm, current_time):
+    def count_error_state_based(self, arm, feedback_color):
         """
-        CENTRAL ERROR COUNTING METHOD
-        Strictly prevents error inflation by enforcing a 2-second cooldown.
-        Returns True if error was counted, False if blocked by cooldown.
+        Counts errors using STATE MACHINE (Rising Edge).
+        Increments ONLY when entering a RED state from a non-RED state.
         """
-        if current_time > self.feedback_cooldown[arm]:
-            self.feedback_error_counts[arm] += 1
-            self.feedback_cooldown[arm] = current_time + 2.0
-            return True
-        return False
+        if feedback_color == "RED":
+            if not self.in_error_state[arm]:
+                # Rising edge: We just entered error state
+                self.feedback_error_counts[arm] += 1
+                self.in_error_state[arm] = True
+        else:
+            # Falling edge: We are safe now
+            self.in_error_state[arm] = False
 
     def process_rep(self, arm, angle, metrics, current_time, history):
         """Process rep counting for a single side independently"""
@@ -90,9 +104,9 @@ class RepCounter:
 
         prev_stage = metrics.stage
         
-        # Get calibrated thresholds
-        contracted = self.calibration.contracted_threshold
-        extended = self.calibration.extended_threshold
+        # Get calibrated thresholds SPECIFIC TO THIS ARM
+        contracted = self.calibration.contracted_thresholds[arm]
+        extended = self.calibration.extended_thresholds[arm]
         
         # --- 1. DETERMINE STATE ---
         target_state = self._determine_target_state(angle, contracted, extended, prev_stage)
@@ -173,45 +187,54 @@ class RepCounter:
                     self.ready_to_count[arm] = False
 
     def _provide_user_centered_feedback(self, arm, angle, metrics, current_time):
-        """Encouraging feedback with stable UI colors - AGNOSTIC"""
+        """
+        Determines form feedback and counts errors.
+        CRITICAL FIX: Error counting happens BEFORE any Fatigue Override logic.
+        """
         
-        # 1. PRIORITY: Show compliment after rep
+        # 1. Determine "Natural" Feedback (based on mechanics)
+        potential_feedback = "Smooth movements"
+        potential_color = "GREEN"
+        
+        # High angle (Full extension) is still a positive indicator
+        if angle > 170.0:
+            potential_feedback = "Good extension"
+            potential_color = "GREEN"
+            
+        # CRITICAL ERROR CHECK (e.g., lost tracking or extreme angle)
+        if metrics.stage == ArmStage.LOST.value:
+            potential_feedback = "Adjust your position"
+            potential_color = "RED"
+            self.color_lock_until[arm] = current_time + 2.0
+        
+        # 2. COUNT ERRORS NOW (Before any overrides hide them)
+        # This fixes the "Zero Form Error" bug.
+        self.count_error_state_based(arm, potential_color)
+
+        # 3. Apply Feedback to UI (If not locked by Fatigue or Compliment)
+        
+        # Check 1: Is Fatigue Message Active? (Don't overwrite it, but we already counted the error above)
+        if metrics.feedback == "Fatigue Detected: Take a Rest":
+            return
+
+        # Check 2: Is Compliment Active?
         if (current_time - self.last_rep_time[arm]) < self.color_hold_duration:
             metrics.feedback = self.current_compliment[arm]
             metrics.feedback_color = "GREEN"
             return
 
-        # 2. Check UI Color Lock
+        # Check 3: Is Color Locked?
         if current_time < self.color_lock_until[arm]:
             return
 
-        # 3. Form Coaching (Simplified - NO "EASE OFF")
-        new_feedback = "Smooth movements"
-        feedback_color = "GREEN"
-        
-        # High angle (Full extension) is still a positive indicator
-        if angle > 170.0:
-            new_feedback = "Good extension" 
-            feedback_color = "GREEN"
-            
-        # ONLY trigger RED for critical tracking loss
-        if metrics.stage == ArmStage.LOST.value:
-            new_feedback = "Adjust your position"
-            feedback_color = "RED"
-            self.color_lock_until[arm] = current_time + 2.0
-        
-        # Update Feedback
-        if new_feedback != self.last_feedback[arm]:
-            metrics.feedback = new_feedback
-            metrics.feedback_color = feedback_color
-            self.last_feedback[arm] = new_feedback
-            
-            # TRACK ERRORS: Use central method with cooldown
-            if feedback_color == "RED":
-                self.count_error(arm, current_time)
+        # Apply calculated feedback
+        if potential_feedback != self.last_feedback[arm]:
+            metrics.feedback = potential_feedback
+            metrics.feedback_color = potential_color
+            self.last_feedback[arm] = potential_feedback
         else:
-            metrics.feedback = new_feedback
-            metrics.feedback_color = feedback_color
+            metrics.feedback = potential_feedback
+            metrics.feedback_color = potential_color
 
     def reset_arm(self, arm):
         """Reset tracking for specific side"""
@@ -221,3 +244,4 @@ class RepCounter:
         self.last_feedback[arm] = ""
         self.color_lock_until[arm] = 0
         self.ready_to_count[arm] = False
+        self.in_error_state[arm] = False

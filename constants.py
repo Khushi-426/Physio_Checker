@@ -3,7 +3,7 @@ Configuration constants and enumerations
 """
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Dict
 import mediapipe as mp 
 
 class WorkoutPhase(Enum):
@@ -103,11 +103,6 @@ STANDING_ROW = ExerciseConfig(
     ]
 )
 
-# --- LATERAL RAISE CONFIGURATION ---
-# Using NOSE-SHOULDER-ELBOW.
-# Arms Down (Start): Angle ~ 180
-# Arms T-Pose (Target): Angle ~ 90
-# This matches the RepCounter logic (Target < Start)
 LATERAL_RAISE = ExerciseConfig(
     name="Lateral Raise",
     joint_to_track=ExerciseJoint.SHOULDER,
@@ -124,22 +119,37 @@ LATERAL_RAISE = ExerciseConfig(
 
 # --- EXERCISE REGISTRY ---
 EXERCISE_PRESETS = {
-    "Bicep Curl": BICEP_CURL,
-    "Bicep Curls": BICEP_CURL,
-    
-    "Squat": SQUAT,
-    "Squats": SQUAT,
-    
-    "Knee Lift": KNEE_LIFT,
-    "Knee Lifts": KNEE_LIFT,
-    
+    "Bicep Curl": BICEP_CURL, "Bicep Curls": BICEP_CURL,
+    "Squat": SQUAT, "Squats": SQUAT,
+    "Knee Lift": KNEE_LIFT, "Knee Lifts": KNEE_LIFT,
     "Shoulder Press": SHOULDER_PRESS,
-    
-    "Standing Row": STANDING_ROW,
-    "Standing Rows": STANDING_ROW,
+    "Standing Row": STANDING_ROW, "Standing Rows": STANDING_ROW,
+    "Lateral Raise": LATERAL_RAISE, "Lateral Raises": LATERAL_RAISE
+}
 
-    "Lateral Raise": LATERAL_RAISE,
-    "Lateral Raises": LATERAL_RAISE
+# --- FATIGUE DETECTION CONSTANTS ---
+FACE_LANDMARKS = {
+    # Left Eye: [P1, P2, P3, P4, P5, P6]
+    "LEFT_EYE": [33, 160, 158, 133, 153, 144], 
+    # Right Eye: [P1, P2, P3, P4, P5, P6]
+    "RIGHT_EYE": [362, 385, 387, 263, 373, 380], 
+    # Mouth: [Left, Right, Top, Bottom]
+    "MOUTH": [78, 308, 13, 14],
+    # Nose & Ears for Head Pose
+    "NOSE_TIP": 1,
+    "LEFT_EAR": 234,
+    "RIGHT_EAR": 454
+}
+
+FATIGUE_THRESHOLDS = {
+    "EAR_MIN": 0.20,      # VERY STRICT: Eyes must be almost shut (Sleepy/Pain)
+    "MAR_MAX": 0.75,      # VERY STRICT: Mouth must be wide open (Heavy Gasp)
+    "ACCURACY_LIMIT": 101,# Keep form check disabled for demo, rely on strict face
+    "COOLDOWN": 4.0,      # Slower alerts
+    
+    # --- TEMPORAL FILTER SETTINGS (REQUIRED FOR STRICT LOGIC) ---
+    "HISTORY_WINDOW": 20, # Analyze last ~0.7 seconds (at 30fps)
+    "TRIGGER_COUNT": 16   # Must be fatigued for 80% of the window
 }
 
 # Settings

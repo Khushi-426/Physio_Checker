@@ -1,5 +1,5 @@
 """
-Calibration logic: Dynamically determines ROM thresholds with minimal voice spam
+Calibration logic: Dynamically determines ROM thresholds INDEPENDENTLY per arm
 """
 import time
 from typing import TYPE_CHECKING
@@ -21,8 +21,10 @@ class CalibrationManager:
         self.exercise_name = self.exercise_config.name
 
         self.start_time = 0.0
-        self.min_angle = 360  
-        self.max_angle = 0    
+        
+        # FIXED: Independent tracking
+        self.min_angles = {'RIGHT': 360, 'LEFT': 360}
+        self.max_angles = {'RIGHT': 0, 'LEFT': 0}
 
     def _get_instruction(self, phase_type: str) -> str:
         """Returns natural language instructions based on the exercise type."""
@@ -65,13 +67,14 @@ class CalibrationManager:
         self.data.active = True
         self.data.phase = CalibrationPhase.EXTEND
         
-        # SMART MESSAGE: Get exercise-specific instruction
         self.data.message = self._get_instruction("EXTEND")
         
         self.data.progress = 0
         self.start_time = time.time()
-        self.min_angle = 360
-        self.max_angle = 0
+        
+        # Reset independent trackers
+        self.min_angles = {'RIGHT': 360, 'LEFT': 360}
+        self.max_angles = {'RIGHT': 0, 'LEFT': 0}
         print(f"Starting calibration for: {self.exercise_name}")
 
     def process_frame(self, results, current_time: float) -> bool:
@@ -80,18 +83,19 @@ class CalibrationManager:
             return False
 
         angles = self.pose_processor.get_both_arm_angles(results)
-        valid_angles = [a for a in angles.values() if a is not None]
-
-        if not valid_angles:
-            # Only update if the joint is actually lost to avoid voice spam
+        
+        # Check if we have at least one valid arm
+        if angles['RIGHT'] is None and angles['LEFT'] is None:
             if "Searching" not in self.data.message:
                 self.data.message = f"Searching for your {self.joint_name}..."
             self.start_time = current_time 
             return False
             
-        current_angle = sum(valid_angles) / len(valid_angles)
-        self.min_angle = min(self.min_angle, current_angle)
-        self.max_angle = max(self.max_angle, current_angle)
+        # FIXED: Update Independent Trackers
+        for arm in ['RIGHT', 'LEFT']:
+            if angles[arm] is not None:
+                self.min_angles[arm] = min(self.min_angles[arm], angles[arm])
+                self.max_angles[arm] = max(self.max_angles[arm], angles[arm])
         
         elapsed_time = current_time - self.start_time
         self.data.progress = int((elapsed_time / self.hold_time) * 100)
@@ -99,21 +103,27 @@ class CalibrationManager:
         if self.data.phase == CalibrationPhase.EXTEND:
             # Transition to contraction phase after hold time
             if elapsed_time >= self.hold_time:
-                self.data.extended_threshold = int(self.max_angle)
-                self.data.phase = CalibrationPhase.CONTRACT
+                # Store independent extended thresholds
+                self.data.extended_thresholds['RIGHT'] = int(self.max_angles['RIGHT']) if self.max_angles['RIGHT'] > 0 else 160
+                self.data.extended_thresholds['LEFT'] = int(self.max_angles['LEFT']) if self.max_angles['LEFT'] > 0 else 160
                 
-                # SMART MESSAGE: Update for the target position
+                self.data.phase = CalibrationPhase.CONTRACT
                 self.data.message = self._get_instruction("CONTRACT")
                 
                 self.start_time = current_time
                 self.data.progress = 0
-                self.min_angle = 360 
-                self.max_angle = 0 
+                
+                # Reset for contraction phase
+                self.min_angles = {'RIGHT': 360, 'LEFT': 360}
+                self.max_angles = {'RIGHT': 0, 'LEFT': 0}
         
         elif self.data.phase == CalibrationPhase.CONTRACT:
-            # Finalize calibration once contracted position is held
+            # Finalize calibration
             if elapsed_time >= self.hold_time:
-                self.data.contracted_threshold = int(self.min_angle)
+                # Store independent contracted thresholds
+                self.data.contracted_thresholds['RIGHT'] = int(self.min_angles['RIGHT']) if self.min_angles['RIGHT'] < 360 else 50
+                self.data.contracted_thresholds['LEFT'] = int(self.min_angles['LEFT']) if self.min_angles['LEFT'] < 360 else 50
+                
                 self._finalize_calibration()
                 return True
                 
@@ -121,12 +131,15 @@ class CalibrationManager:
 
     def _finalize_calibration(self):
         """Calculates final thresholds and sets the completion message."""
-        self.data.safe_angle_min = max(20, self.data.contracted_threshold - self.safety_margin)
-        self.data.safe_angle_max = min(175, self.data.extended_threshold + self.safety_margin)
+        # Calculate safe ranges (using average for safety limits, or min/max of both)
+        avg_con = (self.data.contracted_thresholds['RIGHT'] + self.data.contracted_thresholds['LEFT']) / 2
+        avg_ext = (self.data.extended_thresholds['RIGHT'] + self.data.extended_thresholds['LEFT']) / 2
+        
+        self.data.safe_angle_min = max(20, int(avg_con - self.safety_margin))
+        self.data.safe_angle_max = min(175, int(avg_ext + self.safety_margin))
 
         self.data.active = False
         self.data.phase = CalibrationPhase.COMPLETE
-        # Final success message
         self.data.message = "Calibration successful. Ready to start!"
         self.data.progress = 100
-        print(f"Calibration Finalized: {self.data.contracted_threshold} to {self.data.extended_threshold}")
+        print(f"Calibration Finalized. R: {self.data.contracted_thresholds['RIGHT']}-{self.data.extended_thresholds['RIGHT']}, L: {self.data.contracted_thresholds['LEFT']}-{self.data.extended_thresholds['LEFT']}")

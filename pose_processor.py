@@ -1,11 +1,10 @@
 """
-MediaPipe pose detection and landmark extraction - AGNOSTIC
+MediaPipe pose detection and landmark extraction - ROBUST & STRICT FATIGUE DETECTION
 """
 import mediapipe as mp
 import math
-from typing import Dict, Optional
-from constants import ExerciseConfig 
-
+from typing import Dict, Optional, List
+from constants import ExerciseConfig, FACE_LANDMARKS
 
 class PoseProcessor:
     """Handles MediaPipe pose detection and landmark extraction"""
@@ -13,6 +12,93 @@ class PoseProcessor:
     def __init__(self, angle_calculator, exercise_config: ExerciseConfig):
         self.angle_calculator = angle_calculator
         self.config = exercise_config 
+
+    def _get_distance(self, p1, p2) -> float:
+        """Euclidean distance helper"""
+        return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
+
+    def _is_head_pose_valid(self, landmarks) -> bool:
+        """
+        Validates if the user is looking relatively straight ahead.
+        Prevents false fatigue detection when looking down/sideways.
+        """
+        try:
+            nose = landmarks[FACE_LANDMARKS["NOSE_TIP"]]
+            left_ear = landmarks[FACE_LANDMARKS["LEFT_EAR"]]
+            right_ear = landmarks[FACE_LANDMARKS["RIGHT_EAR"]]
+            
+            # 1. Pitch Check (Looking Down): Nose should not be too far below ears vertically
+            ear_y_avg = (left_ear.y + right_ear.y) / 2
+            # If nose is significantly below ears, head is tilted down
+            if (nose.y - ear_y_avg) > 0.15: 
+                return False 
+
+            # 2. Yaw Check (Turning Head): Nose should be roughly centered between ears
+            ear_width = abs(right_ear.x - left_ear.x)
+            if ear_width == 0: return False
+            
+            nose_offset = abs(nose.x - (left_ear.x + right_ear.x) / 2)
+            # If nose offset is > 30% of face width, head is turned
+            if (nose_offset / ear_width) > 0.30: 
+                return False
+                
+            return True
+        except (IndexError, AttributeError):
+            return True # Assume valid if landmarks missing to allow fallback
+
+    def calculate_ear(self, landmarks, indices: List[int]) -> float:
+        """Calculate Eye Aspect Ratio (EAR)"""
+        try:
+            pts = [landmarks[i] for i in indices]
+            v1 = self._get_distance(pts[1], pts[5])
+            v2 = self._get_distance(pts[2], pts[4])
+            h = self._get_distance(pts[0], pts[3])
+            
+            if h < 0.01: return 0.3 # Prevent division by zero
+            return (v1 + v2) / (2.0 * h)
+        except (IndexError, AttributeError):
+            return 0.3
+
+    def calculate_mar(self, landmarks, indices: List[int]) -> float:
+        """Calculate Mouth Aspect Ratio (MAR)"""
+        try:
+            pts = [landmarks[i] for i in indices] 
+            v = self._get_distance(pts[2], pts[3]) 
+            h = self._get_distance(pts[0], pts[1]) 
+            
+            if h < 0.01: return 0.0
+            return v / h
+        except (IndexError, AttributeError):
+            return 0.0 
+
+    def check_fatigue_face(self, face_landmarks) -> bool:
+        """
+        Returns True ONLY if 'Pain Face' is detected AND Head Pose is valid.
+        """
+        if not face_landmarks: return False
+        
+        lm = face_landmarks.landmark
+        
+        # 1. Edge Case: Check Head Pose First
+        if not self._is_head_pose_valid(lm):
+            return False # Invalid pose, do not detect fatigue
+        
+        # 2. Calculate Ratios
+        left_ear = self.calculate_ear(lm, FACE_LANDMARKS["LEFT_EYE"])
+        right_ear = self.calculate_ear(lm, FACE_LANDMARKS["RIGHT_EYE"])
+        avg_ear = (left_ear + right_ear) / 2.0
+        
+        mar = self.calculate_mar(lm, FACE_LANDMARKS["MOUTH"])
+        
+        # 3. Strict Thresholds (Defined in constants.py)
+        # 0.20 is very low (requires genuine squint/squeeze)
+        # 0.75 is very high (requires wide open mouth)
+        from constants import FATIGUE_THRESHOLDS
+        
+        is_squinting = avg_ear < FATIGUE_THRESHOLDS["EAR_MIN"]
+        is_gasping = mar > FATIGUE_THRESHOLDS["MAR_MAX"]
+        
+        return is_squinting or is_gasping
     
     def extract_arm_angle(self, landmarks, arm: str) -> Optional[float]:
         """Extract angle for the specified joint using the current exercise config"""

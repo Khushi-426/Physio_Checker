@@ -12,7 +12,8 @@ import {
   History,
   AlertCircle,
   RefreshCw,
-  Calendar
+  Calendar,
+  Zap // Icon for Fatigue
 } from "lucide-react";
 import "./PatientHome.css";
 
@@ -29,6 +30,7 @@ const PatientHome = () => {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState({
     avgAccuracy: 0,
+    avgFFI: 0, // NEW: Average Facial Fatigue Index
     totalSessions: 0,
     totalReps: 0
   });
@@ -57,12 +59,20 @@ const PatientHome = () => {
 
       // Calculate Stats
       const totalReps = data.reduce((acc, curr) => acc + (curr.reps || 0), 0);
+      
       const avgAcc = data.length > 0
         ? Math.round(data.reduce((acc, curr) => acc + (curr.qualityScore || 0), 0) / data.length)
         : 0;
 
+      // NEW: Calculate Average FFI
+      // Checks if 'ffi' exists in session data, defaults to 0 if missing
+      const avgFFI = data.length > 0
+        ? Math.round(data.reduce((acc, curr) => acc + (curr.ffi || 0), 0) / data.length)
+        : 0;
+
       setStats({
         avgAccuracy: avgAcc,
+        avgFFI: avgFFI,
         totalSessions: data.length,
         totalReps: totalReps
       });
@@ -87,7 +97,7 @@ const PatientHome = () => {
       </div>
       <div className="pc-stat-text">
         <div className="pc-stat-label">{label}</div>
-        <div className="pc-stat-value">{value}</div>
+        <div className="pc-stat-value" style={{ color: colorHex }}>{value}</div>
         {subLabel && <div className="pc-stat-sub">{subLabel}</div>}
       </div>
     </motion.div>
@@ -115,9 +125,32 @@ const PatientHome = () => {
 
         {/* Stats Row */}
         <section className="pc-stats-row">
-          <StatCard Icon={CheckCircle} label="Avg. Accuracy" value={`${stats.avgAccuracy}%`} subLabel="Target: >85%" colorHex="#10B981" />
-          <StatCard Icon={Activity} label="Total Workouts" value={stats.totalSessions} subLabel="Sessions Completed" colorHex="#3B82F6" />
-          <StatCard Icon={Dumbbell} label="Total Reps" value={stats.totalReps} subLabel="Lifetime Repetitions" colorHex="#F59E0B" />
+          <StatCard 
+            Icon={CheckCircle} 
+            label="Avg. Accuracy" 
+            value={`${stats.avgAccuracy}%`} 
+            subLabel="Target: >85%" 
+            colorHex="#10B981" 
+          />
+          
+          {/* NEW: FFI Stat Card */}
+          <StatCard 
+            Icon={Zap} 
+            label="Avg. Fatigue (FFI)" 
+            value={`${stats.avgFFI}%`} 
+            subLabel="Facial Strain Level" 
+            colorHex="#F59E0B" 
+          />
+
+          <StatCard 
+            Icon={Activity} 
+            label="Total Workouts" 
+            value={stats.totalSessions} 
+            subLabel="Sessions Completed" 
+            colorHex="#3B82F6" 
+          />
+          
+
         </section>
 
         {/* History Panel */}
@@ -148,6 +181,7 @@ const PatientHome = () => {
                   <tr>
                     <th>Exercise Protocol</th>
                     <th>Performance</th>
+                    <th>Fatigue (FFI)</th> {/* NEW COLUMN */}
                     <th>Reps</th>
                     <th>Date & Time</th>
                     <th>Status</th>
@@ -160,6 +194,8 @@ const PatientHome = () => {
                         <div className="pc-td-title">{sess.exerciseType}</div>
                         <div className="pc-td-sub">{sess.duration ? `${Math.floor(sess.duration / 60)}m ${Math.round(sess.duration % 60)}s` : 'N/A'}</div>
                       </td>
+                      
+                      {/* Performance Bar (Green) */}
                       <td>
                         <div className="pc-perf">
                           <div className="pc-bar" aria-hidden>
@@ -168,6 +204,17 @@ const PatientHome = () => {
                           <div className="pc-perc">{sess.qualityScore}%</div>
                         </div>
                       </td>
+
+                      {/* NEW: Fatigue FFI Bar (Yellow) */}
+                      <td>
+                        <div className="pc-perf">
+                          <div className="pc-bar" aria-hidden style={{background: '#FFF7ED'}}>
+                            <div className="pc-fill" style={{ width: `${Math.min(100, sess.ffi || 0)}%`, background: '#F59E0B' }} />
+                          </div>
+                          <div className="pc-perc" style={{color: '#D97706'}}>{sess.ffi || 0}%</div>
+                        </div>
+                      </td>
+
                       <td className="pc-td-strong">{sess.reps}</td>
                       <td>
                         <div className="pc-td-title">{new Date(sess.performedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>

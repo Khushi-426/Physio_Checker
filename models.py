@@ -1,5 +1,5 @@
 """
-Data classes for state management - UPDATED FOR USER-CENTERED DESIGN & ACCURACY
+Data classes for state management - UPDATED FOR FFI & ACCURACY
 """
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -31,7 +31,7 @@ class ArmMetrics:
     rep_count: int = 0
     stage: str = "DOWN"
     angle: int = 0
-    accuracy: int = 100  # NEW: Tracks rep quality (0-100%)
+    accuracy: int = 100  # Tracks rep quality (0-100%)
     rep_time: float = 0.0
     min_rep_time: float = 0.0
     curr_rep_time: float = 0.0
@@ -46,7 +46,7 @@ class ArmMetrics:
             'rep_count': self.rep_count,
             'stage': self.stage,
             'angle': self.angle,
-            'accuracy': self.accuracy, # Now sent to frontend
+            'accuracy': self.accuracy, 
             'rep_time': round(self.rep_time, 2),
             'min_rep_time': round(self.min_rep_time, 2),
             'curr_rep_time': round(self.curr_rep_time, 2),
@@ -58,23 +58,25 @@ class ArmMetrics:
 class CalibrationData:
     """Manages calibration state and measurements"""
     active: bool = False
-    phase: str = None # Now uses string phases like "EXTEND"
+    phase: str = None 
     phase_start_time: float = 0.0
-    extended_angles: Dict[str, List[float]] = field(default_factory=lambda: {'RIGHT': [], 'LEFT': []})
-    contracted_angles: Dict[str, List[float]] = field(default_factory=lambda: {'RIGHT': [], 'LEFT': []})
-    message: str = "" # Holds the non-repeating calibration instructions
+    message: str = "" 
     progress: int = 0
     
-    contracted_threshold: int = 50
-    extended_threshold: int = 160
+    # Independent thresholds for each arm
+    contracted_thresholds: Dict[str, int] = field(default_factory=lambda: {'RIGHT': 50, 'LEFT': 50})
+    extended_thresholds: Dict[str, int] = field(default_factory=lambda: {'RIGHT': 160, 'LEFT': 160})
+    
     safe_angle_min: int = 30
     safe_angle_max: int = 175
     
-    def reset(self):
-        """Reset calibration data for new session"""
-        self.extended_angles = {'RIGHT': [], 'LEFT': []}
-        self.contracted_angles = {'RIGHT': [], 'LEFT': []}
-        self.progress = 0
+    @property
+    def contracted_threshold(self):
+        return int((self.contracted_thresholds['RIGHT'] + self.contracted_thresholds['LEFT']) / 2)
+
+    @property
+    def extended_threshold(self):
+        return int((self.extended_thresholds['RIGHT'] + self.extended_thresholds['LEFT']) / 2)
 
 @dataclass
 class SessionHistory:
