@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   --bg-color: #F9F7F2;        /* Creamy Off-White */
   --card-bg: #FFFFFF;         /* Pure White */
