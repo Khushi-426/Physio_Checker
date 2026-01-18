@@ -14,7 +14,6 @@ import {
   WifiOff,
   Volume2,
   VolumeX,
-  User,
   Loader,
   RefreshCw,
   Target,
@@ -55,7 +54,7 @@ const MOCK_EXERCISES = [
     difficulty: "Intermediate",
     color: "#E3F2FD",
     iconColor: "#1565C0",
-    recommended: false, 
+    recommended: false,
     instructions: [
       "Stand with feet shoulder-width apart.",
       "Lower your hips back and down as if sitting in a chair.",
@@ -74,7 +73,7 @@ const MOCK_EXERCISES = [
     difficulty: "Beginner",
     color: "#F3E5F5",
     iconColor: "#7B1FA2",
-    recommended: false, 
+    recommended: false,
     instructions: [
       "Stand holding a dumbbell in each hand with palms facing forward.",
       "Keep your elbows close to your torso at all times.",
@@ -84,6 +83,78 @@ const MOCK_EXERCISES = [
     video: null,
   },
 ];
+
+// --- Utility: fingerprint generation for dedupe ---
+const getFingerprint = (title = "") =>
+  title
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/s$/, "") // remove final trailing 's' to reduce plural/singular duplicates
+    .replace(/[^a-z0-9]/g, ""); // remove non-alphanumeric
+
+const mergeAndDedupeExercises = (items) => {
+  // items: array where each item may be from 'api' or 'mock' (we annotate with __source)
+  const map = new Map();
+
+  for (const raw of items) {
+    // clone shallowly to avoid mutating originals
+    const item = { ...raw };
+    const title = item.title || "";
+    const fp = getFingerprint(title) || `${item.id || Math.random().toString(36).slice(2)}`;
+    item._fingerprint = fp;
+
+    // ensure id exists and is stable
+    if (!item.id) {
+      item.id = fp;
+    }
+
+    const existing = map.get(fp);
+    if (!existing) {
+      map.set(fp, item);
+    } else {
+      // Decide which one to keep:
+      // 1) If either is recommended (assigned), prefer the recommended one.
+      if (existing.recommended && !item.recommended) {
+        continue; // keep existing
+      }
+      if (!existing.recommended && item.recommended) {
+        map.set(fp, item);
+        continue;
+      }
+
+      // 2) Prefer API source over mock source (if __source annotated)
+      const existingSource = existing.__source || "api";
+      const itemSource = item.__source || "api";
+      if (existingSource === "mock" && itemSource !== "mock") {
+        map.set(fp, item);
+        continue;
+      }
+      if (existingSource !== "mock" && itemSource === "mock") {
+        continue; // keep existing
+      }
+
+      // 3) Fallback: prefer one with a video or longer description (heuristic)
+      const existingScore =
+        (existing.video ? 2 : 0) + (existing.description ? existing.description.length / 1000 : 0);
+      const itemScore = (item.video ? 2 : 0) + (item.description ? item.description.length / 1000 : 0);
+
+      if (itemScore > existingScore) {
+        map.set(fp, item);
+      }
+      // else keep existing
+    }
+  }
+
+  // return as array sorted: recommended (assigned) first, then alphabetically by title
+  const unique = Array.from(map.values()).sort((a, b) => {
+    if (a.recommended && !b.recommended) return -1;
+    if (!a.recommended && b.recommended) return 1;
+    return (a.title || "").localeCompare(b.title || "");
+  });
+
+  return unique;
+};
 
 const Tracker = () => {
   const navigate = useNavigate();
@@ -154,34 +225,34 @@ const Tracker = () => {
   useEffect(() => {
     let newSocket;
     try {
-        newSocket = io(API_URL);
-        setSocket(newSocket);
+      newSocket = io(API_URL);
+      setSocket(newSocket);
 
-        newSocket.on("connect", () => {
+      newSocket.on("connect", () => {
         console.log("WebSocket Connected");
         setConnectionStatus("CONNECTED");
-        });
+      });
 
-        newSocket.on("connect_error", (err) => {
+      newSocket.on("connect_error", (err) => {
         console.error("Socket Connection Error:", err);
         setConnectionStatus("DISCONNECTED");
-        });
+      });
 
-        newSocket.on("disconnect", () => {
+      newSocket.on("disconnect", () => {
         setConnectionStatus("DISCONNECTED");
-        });
+      });
 
-        newSocket.on("session_stopped", () => {
+      newSocket.on("session_stopped", () => {
         handleExitNavigation();
-        });
+      });
 
-        newSocket.on("workout_update", (json) => {
+      newSocket.on("workout_update", (json) => {
         // FIXED: Merge state instead of replace to preserve defaults like 'gesture' if missing
         setData((prev) => ({ ...prev, ...json }));
         handleWorkoutUpdate(json);
-        });
+      });
     } catch (e) {
-        console.error("Socket initialization failed", e);
+      console.error("Socket initialization failed", e);
     }
 
     // Initial Fetch
@@ -193,13 +264,15 @@ const Tracker = () => {
       if (newSocket) newSocket.close();
       window.speechSynthesis.cancel();
     };
-  }, [navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // ✅ NEW EFFECT: Re-fetch exercises when 'user' loads
+  // ✅ NEW EFFECT: Re-fetch exercises when 'user' loads (keeps assignments updated)
   useEffect(() => {
     if (user) {
       fetchExercises();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   const fetchExercises = async () => {
@@ -210,24 +283,38 @@ const Tracker = () => {
       const response = await fetch(`${API_URL}/api/exercises${emailParam}`);
 
       if (response.ok) {
-        const apiData = await response.json();
-        // MERGE: Combine backend data with our mock frontend exercises
-        // We filter mocks to ensure we don't duplicate if they exist in backend
-        const uniqueMocks = MOCK_EXERCISES.filter(
-          (mock) => !apiData.some((api) => api.id === mock.id)
-        );
-        setExercises([...apiData, ...uniqueMocks]);
+        const apiDataRaw = await response.json();
+
+        // Ensure each API item is annotated with a source before merging
+        const apiData = (Array.isArray(apiDataRaw) ? apiDataRaw : []).map((it) => ({
+          ...it,
+          __source: "api",
+        }));
+
+        // annotate mocks
+        const mocks = MOCK_EXERCISES.map((m) => ({ ...m, __source: "mock" }));
+
+        // Merge & dedupe robustly
+        const all = [...apiData, ...mocks];
+        const unique = mergeAndDedupeExercises(all);
+
+        setExercises(unique);
       } else {
         console.error("Failed to fetch exercises:", response.status);
         setFetchError(true);
-        // Fallback to Mock Data Only
-        setExercises(MOCK_EXERCISES);
+
+        // Fallback: use mocked exercises but still dedupe (in case mocks contain similar items)
+        const mocks = MOCK_EXERCISES.map((m) => ({ ...m, __source: "mock" }));
+        const uniqueMocks = mergeAndDedupeExercises(mocks);
+        setExercises(uniqueMocks);
       }
     } catch (error) {
       console.error("Network error fetching exercises:", error);
       setFetchError(true);
-      // Fallback to Mock Data Only
-      setExercises(MOCK_EXERCISES);
+
+      const mocks = MOCK_EXERCISES.map((m) => ({ ...m, __source: "mock" }));
+      const uniqueMocks = mergeAndDedupeExercises(mocks);
+      setExercises(uniqueMocks);
     }
   };
 
@@ -350,17 +437,12 @@ const Tracker = () => {
         triggerSpeech("Initializing. Please align with the skeleton.");
 
         if (timerRef.current) clearInterval(timerRef.current);
-        timerRef.current = setInterval(
-          () => setSessionTime((t) => t + 1),
-          1000
-        );
+        timerRef.current = setInterval(() => setSessionTime((t) => t + 1), 1000);
       } else {
         throw new Error("Failed to start session");
       }
     } catch (e) {
-      alert(
-        "Could not connect to AI Server. Please ensure 'app.py' is running."
-      );
+      alert("Could not connect to AI Server. Please ensure 'app.py' is running.");
       console.error(e);
       setConnectionStatus("DISCONNECTED");
       setViewMode("LIBRARY");
@@ -480,9 +562,7 @@ const Tracker = () => {
           >
             <AlertCircle size={48} style={{ margin: "0 auto 20px" }} />
             <h3>Cannot connect to AI Server</h3>
-            <p>
-              Please ensure the Python backend (app.py) is running on port 5001.
-            </p>
+            <p>Please ensure the Python backend (app.py) is running on port 5001.</p>
             <button
               onClick={fetchExercises}
               style={{
@@ -538,7 +618,7 @@ const Tracker = () => {
             >
               {assigned.map((ex) => (
                 <ExerciseCard
-                  key={ex.id}
+                  key={ex.id || ex._fingerprint}
                   ex={ex}
                   onClick={() => handleExerciseClick(ex)}
                   isAssigned={true}
@@ -555,8 +635,7 @@ const Tracker = () => {
                 color: "#888",
               }}
             >
-              No specific exercises assigned today. Check "Exercise Library"
-              below.
+              No specific exercises assigned today. Check "Exercise Library" below.
             </div>
           )}
         </div>
@@ -595,7 +674,7 @@ const Tracker = () => {
           >
             {other.map((ex) => (
               <ExerciseCard
-                key={ex.id}
+                key={ex.id || ex._fingerprint}
                 ex={ex}
                 onClick={() => handleExerciseClick(ex)}
                 isAssigned={false}
@@ -669,9 +748,7 @@ const Tracker = () => {
                     marginBottom: "32px",
                   }}
                 >
-                  The exercise <strong>"{pendingExercise?.title}"</strong> is
-                  not in your assigned protocol. Performing unassigned exercises
-                  may increase injury risk.
+                  The exercise <strong>"{pendingExercise?.title}"</strong> is not in your assigned protocol. Performing unassigned exercises may increase injury risk.
                 </p>
                 <div style={{ display: "flex", gap: "12px" }}>
                   <button
@@ -806,9 +883,7 @@ const Tracker = () => {
                     fontSize: "0.95rem",
                   }}
                 >
-                  <span style={{ color: "#69B341", fontWeight: "bold" }}>
-                    {i + 1}.
-                  </span>
+                  <span style={{ color: "#69B341", fontWeight: "bold" }}>{i + 1}.</span>
                   {step}
                 </li>
               ))}
@@ -844,9 +919,7 @@ const Tracker = () => {
                 transition: "transform 0.1s",
               }}
               disabled={isLoading}
-              onMouseDown={(e) =>
-                (e.currentTarget.style.transform = "scale(0.98)")
-              }
+              onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
               onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
             >
               {isLoading ? (
@@ -889,7 +962,9 @@ const Tracker = () => {
     const jointName = data?.tracked_joint_name || "JOINT";
     const feedbackColor = data?.RIGHT.feedback_color || "GRAY";
     const isSquat = selectedExercise?.title.toLowerCase().includes("squat");
-    const isKneeLift = selectedExercise?.title.toLowerCase().includes("knee") || selectedExercise?.title.toLowerCase().includes("lift");
+    const isKneeLift =
+      selectedExercise?.title.toLowerCase().includes("knee") ||
+      selectedExercise?.title.toLowerCase().includes("lift");
 
     return (
       <motion.div
@@ -972,181 +1047,140 @@ const Tracker = () => {
           <div style={{ flex: 1, overflowY: "auto", padding: "25px" }}>
             {/* CONDITIONAL RENDERING */}
             {isSquat ? (
-               <div
-                  style={{
-                    marginBottom: "25px",
-                    background: data.RIGHT?.feedback_color === "GREEN" ? "#E8F5E9" : data.RIGHT?.feedback_color === "RED" ? "#FFEBEE" : "#f8f9fa",
-                    borderRadius: "18px",
-                    padding: "20px",
-                    border: "1px solid #eee",
-                    transition: "all 0.3s ease",
-                  }}
-               >
-                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
-                    <h3 style={{ color: "#444", fontSize: "0.9rem", fontWeight: "800", margin: 0 }}>SQUAT</h3>
-                    <div style={{ background: data.RIGHT?.accuracy > 85 ? "#2C5D31" : "#D32F2F", color: "white", padding: "4px 8px", borderRadius: "12px", fontSize: "0.65rem", fontWeight: "bold" }}>
-                        <Target size={12} /> {data.RIGHT?.accuracy || 100}%
-                    </div>
-                 </div>
-
-                 <div style={{ textAlign: "center", marginBottom: "15px" }}>
-                    <div style={{ fontSize: "0.7rem", color: "#aaa", fontWeight: "700" }}>REPS</div>
-                    <div style={{ fontSize: "2.5rem", fontWeight: "800", color: "#222" }}>{data.RIGHT?.rep_count || 0}</div>
-                 </div>
-
-                 <div style={{ height: "12px", background: "rgba(0,0,0,0.05)", borderRadius: "6px", overflow: "hidden", position: "relative" }}>
-                    <motion.div 
-                        animate={{ width: data.RIGHT ? `${(data.RIGHT.angle / 180) * 100}%` : "0%" }}
-                        style={{ height: "100%", background: "#2C5D31" }}
-                    />
-                 </div>
-                 <div style={{ textAlign: "right", fontSize: "0.7rem", color: "#888", marginTop: "5px" }}>DEPTH INDICATOR</div>
-               </div>
-            ) : (
-              ["RIGHT", "LEFT"].map((arm) => {
-              const metrics = data ? data[arm] : null;
-              const cardColor =
-                metrics?.feedback_color === "RED"
-                  ? "#FFEBEE"
-                  : metrics?.feedback_color === "GREEN"
-                  ? "#E8F5E9"
-                  : "#f8f9fa";
-              
-              // KNEE LIFT specific label
-              const label = isKneeLift ? "LIFT HEIGHT" : "ANGLE";
-              const angleVal = isKneeLift ? "--" : (metrics ? Math.round(metrics.angle) : "--") + "°";
-
-              return (
+              <div
+                style={{
+                  marginBottom: "25px",
+                  background:
+                    data.RIGHT?.feedback_color === "GREEN"
+                      ? "#E8F5E9"
+                      : data.RIGHT?.feedback_color === "RED"
+                      ? "#FFEBEE"
+                      : "#f8f9fa",
+                  borderRadius: "18px",
+                  padding: "20px",
+                  border: "1px solid #eee",
+                  transition: "all 0.3s ease",
+                }}
+              >
                 <div
-                  key={arm}
                   style={{
-                    marginBottom: "25px",
-                    background: cardColor,
-                    borderRadius: "18px",
-                    padding: "20px",
-                    border:
-                      metrics?.feedback_color === "RED"
-                        ? "1px solid #D32F2F"
-                        : metrics?.feedback_color === "GREEN"
-                        ? "1px solid #69B341"
-                        : "1px solid #eee",
-                    transition: "all 0.3s ease",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "15px",
                   }}
                 >
+                  <h3 style={{ color: "#444", fontSize: "0.9rem", fontWeight: "800", margin: 0 }}>
+                    SQUAT
+                  </h3>
                   <div
                     style={{
-                      margin: "0 0 15px 0",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      borderBottom: "1px solid rgba(0,0,0,0.05)",
-                      paddingBottom: "10px",
+                      background: data.RIGHT?.accuracy > 85 ? "#2C5D31" : "#D32F2F",
+                      color: "white",
+                      padding: "4px 8px",
+                      borderRadius: "12px",
+                      fontSize: "0.65rem",
+                      fontWeight: "bold",
                     }}
                   >
-                    <h3
-                      style={{
-                        color: "#444",
-                        fontSize: "0.85rem",
-                        fontWeight: "800",
-                        margin: 0,
-                      }}
-                    >
-                      {arm} {isKneeLift ? "LEG" : jointName.toUpperCase()}
-                    </h3>
-
-                    {/* DYNAMIC ACCURACY BADGE */}
-                    <div
-                      style={{
-                        background:
-                          metrics?.accuracy > 85 ? "#2C5D31" : "#D32F2F",
-                        color: "white",
-                        padding: "4px 8px",
-                        borderRadius: "12px",
-                        fontSize: "0.65rem",
-                        fontWeight: "bold",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "4px",
-                      }}
-                    >
-                      <Target size={12} /> {metrics?.accuracy || 100}%
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "baseline",
-                      marginBottom: "15px",
-                    }}
-                  >
-                    <div style={{ textAlign: "center" }}>
-                      <div
-                        style={{
-                          fontSize: "0.7rem",
-                          color: "#aaa",
-                          fontWeight: "700",
-                        }}
-                      >
-                        REPS
-                      </div>
-                      <div
-                        style={{
-                          fontSize: "2.2rem",
-                          fontWeight: "800",
-                          color: "#222",
-                        }}
-                      >
-                        {metrics ? metrics.rep_count : "--"}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "center" }}>
-                      <div
-                        style={{
-                          fontSize: "0.7rem",
-                          color: "#aaa",
-                          fontWeight: "700",
-                        }}
-                      >
-                        {label}
-                      </div>
-                      {/* Hide number if knee lift, show progress bar instead */}
-                      {!isKneeLift && (
-                      <div
-                        style={{
-                          fontSize: "2.2rem",
-                          fontWeight: "800",
-                          fontFamily: "monospace",
-                          color: "#222",
-                        }}
-                      >
-                        {angleVal}
-                      </div>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div
-                    style={{
-                      height: "6px",
-                      background: "rgba(0,0,0,0.05)",
-                      borderRadius: "4px",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <motion.div
-                      animate={{
-                        width: metrics
-                          ? `${(metrics.angle / 180) * 100}%`
-                          : "0%",
-                      }}
-                      style={{ height: "100%", background: "#2C5D31" }}
-                    />
+                    <Target size={12} /> {data.RIGHT?.accuracy || 100}%
                   </div>
                 </div>
-              );
-            })
+
+                <div style={{ textAlign: "center", marginBottom: "15px" }}>
+                  <div style={{ fontSize: "0.7rem", color: "#aaa", fontWeight: "700" }}>REPS</div>
+                  <div style={{ fontSize: "2.5rem", fontWeight: "800", color: "#222" }}>
+                    {data.RIGHT?.rep_count || 0}
+                  </div>
+                </div>
+
+                <div style={{ height: "12px", background: "rgba(0,0,0,0.05)", borderRadius: "6px", overflow: "hidden", position: "relative" }}>
+                  <motion.div animate={{ width: data.RIGHT ? `${(data.RIGHT.angle / 180) * 100}%` : "0%" }} style={{ height: "100%", background: "#2C5D31" }} />
+                </div>
+                <div style={{ textAlign: "right", fontSize: "0.7rem", color: "#888", marginTop: "5px" }}>DEPTH INDICATOR</div>
+              </div>
+            ) : (
+              ["RIGHT", "LEFT"].map((arm) => {
+                const metrics = data ? data[arm] : null;
+                const cardColor =
+                  metrics?.feedback_color === "RED"
+                    ? "#FFEBEE"
+                    : metrics?.feedback_color === "GREEN"
+                    ? "#E8F5E9"
+                    : "#f8f9fa";
+
+                // KNEE LIFT specific label
+                const label = isKneeLift ? "LIFT HEIGHT" : "ANGLE";
+                const angleVal = isKneeLift ? "--" : (metrics ? Math.round(metrics.angle) : "--") + "°";
+
+                return (
+                  <div
+                    key={arm}
+                    style={{
+                      marginBottom: "25px",
+                      background: cardColor,
+                      borderRadius: "18px",
+                      padding: "20px",
+                      border:
+                        metrics?.feedback_color === "RED"
+                          ? "1px solid #D32F2F"
+                          : metrics?.feedback_color === "GREEN"
+                          ? "1px solid #69B341"
+                          : "1px solid #eee",
+                      transition: "all 0.3s ease",
+                    }}
+                  >
+                    <div
+                      style={{
+                        margin: "0 0 15px 0",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        borderBottom: "1px solid rgba(0,0,0,0.05)",
+                        paddingBottom: "10px",
+                      }}
+                    >
+                      <h3 style={{ color: "#444", fontSize: "0.85rem", fontWeight: "800", margin: 0 }}>
+                        {arm} {isKneeLift ? "LEG" : jointName.toUpperCase()}
+                      </h3>
+
+                      {/* DYNAMIC ACCURACY BADGE */}
+                      <div
+                        style={{
+                          background: metrics?.accuracy > 85 ? "#2C5D31" : "#D32F2F",
+                          color: "white",
+                          padding: "4px 8px",
+                          borderRadius: "12px",
+                          fontSize: "0.65rem",
+                          fontWeight: "bold",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        <Target size={12} /> {metrics?.accuracy || 100}%
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "15px" }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: "0.7rem", color: "#aaa", fontWeight: "700" }}>REPS</div>
+                        <div style={{ fontSize: "2.2rem", fontWeight: "800", color: "#222" }}>{metrics ? metrics.rep_count : "--"}</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: "0.7rem", color: "#aaa", fontWeight: "700" }}>{label}</div>
+                        {!isKneeLift && (
+                          <div style={{ fontSize: "2.2rem", fontWeight: "800", fontFamily: "monospace", color: "#222" }}>{angleVal}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ height: "6px", background: "rgba(0,0,0,0.05)", borderRadius: "4px", overflow: "hidden" }}>
+                      <motion.div animate={{ width: metrics ? `${(metrics.angle / 180) * 100}%` : "0%" }} style={{ height: "100%", background: "#2C5D31" }} />
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -1220,14 +1254,8 @@ const Tracker = () => {
                   gap: "20px",
                 }}
               >
-                {isLoading ? (
-                  <Loader className="spin-animation" size={48} />
-                ) : (
-                  <AlertCircle size={48} />
-                )}
-                <div style={{ fontSize: "1.2rem", opacity: 0.8 }}>
-                  {isLoading ? "Starting Camera..." : "Initializing Camera..."}
-                </div>
+                {isLoading ? <Loader className="spin-animation" size={48} /> : <AlertCircle size={48} />}
+                <div style={{ fontSize: "1.2rem", opacity: 0.8 }}>{isLoading ? "Starting Camera..." : "Initializing Camera..."}</div>
               </div>
             )}
 
@@ -1250,29 +1278,9 @@ const Tracker = () => {
                     zIndex: 30,
                   }}
                 >
-                  <h2
-                    style={{
-                      color: "#fff",
-                      fontSize: "2rem",
-                      marginBottom: "20px",
-                      textShadow: "0 2px 10px rgba(0,0,0,0.8)",
-                    }}
-                  >
-                    {feedback}
-                  </h2>
-                  <div
-                    style={{
-                      width: "60%",
-                      height: "12px",
-                      background: "rgba(255,255,255,0.2)",
-                      borderRadius: "6px",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <motion.div
-                      animate={{ width: `${calibrationProgress}%` }}
-                      style={{ height: "100%", background: "#00E676" }}
-                    />
+                  <h2 style={{ color: "#fff", fontSize: "2rem", marginBottom: "20px", textShadow: "0 2px 10px rgba(0,0,0,0.8)" }}>{feedback}</h2>
+                  <div style={{ width: "60%", height: "12px", background: "rgba(255,255,255,0.2)", borderRadius: "6px", overflow: "hidden" }}>
+                    <motion.div animate={{ width: `${calibrationProgress}%` }} style={{ height: "100%", background: "#00E676" }} />
                   </div>
                 </motion.div>
               )}
@@ -1292,16 +1300,7 @@ const Tracker = () => {
                     zIndex: 30,
                   }}
                 >
-                  <div
-                    style={{
-                      fontSize: "10rem",
-                      fontWeight: "900",
-                      color: "#fff",
-                      textShadow: "0 10px 30px rgba(0,0,0,0.5)",
-                    }}
-                  >
-                    {countdownValue}
-                  </div>
+                  <div style={{ fontSize: "10rem", fontWeight: "900", color: "#fff", textShadow: "0 10px 30px rgba(0,0,0,0.5)" }}>{countdownValue}</div>
                 </motion.div>
               )}
 
@@ -1330,11 +1329,7 @@ const Tracker = () => {
                     zIndex: 30,
                   }}
                 >
-                  {feedback.includes("Form") ? (
-                    <AlertCircle size={28} />
-                  ) : (
-                    <CheckCircle size={28} />
-                  )}
+                  {feedback.includes("Form") ? <AlertCircle size={28} /> : <CheckCircle size={28} />}
                   {feedback}
                 </motion.div>
               )}
@@ -1343,13 +1338,7 @@ const Tracker = () => {
         </div>
 
         {/* AICoach Integration */}
-        <div
-          style={{
-            width: "300px",
-            borderLeft: "1px solid #eee",
-            background: "#F9F7F3",
-          }}
-        >
+        <div style={{ width: "300px", borderLeft: "1px solid #eee", background: "#F9F7F3" }}>
           <AICoach
             data={data}
             feedback={feedback}
@@ -1429,38 +1418,11 @@ const ExerciseCard = ({ ex, onClick, isAssigned }) => (
       <Dumbbell color={ex.iconColor} size={28} />
     </div>
 
-    <h3
-      style={{
-        fontSize: "1.5rem",
-        color: "#1A3C34",
-        marginBottom: "8px",
-        fontWeight: "700",
-      }}
-    >
-      {ex.title}
-    </h3>
-    <div
-      style={{
-        fontSize: "0.85rem",
-        color: "#888",
-        fontWeight: "600",
-        marginBottom: "20px",
-        textTransform: "uppercase",
-        letterSpacing: "0.5px",
-      }}
-    >
+    <h3 style={{ fontSize: "1.5rem", color: "#1A3C34", marginBottom: "8px", fontWeight: "700" }}>{ex.title}</h3>
+    <div style={{ fontSize: "0.85rem", color: "#888", fontWeight: "600", marginBottom: "20px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
       {ex.category}
     </div>
-    <p
-      style={{
-        color: "#555",
-        fontSize: "0.95rem",
-        marginBottom: "25px",
-        lineHeight: "1.6",
-      }}
-    >
-      {ex.description}
-    </p>
+    <p style={{ color: "#555", fontSize: "0.95rem", marginBottom: "25px", lineHeight: "1.6" }}>{ex.description}</p>
     <div
       style={{
         borderTop: "1px solid #f0f0f0",
