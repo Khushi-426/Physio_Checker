@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   User,
@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
+// Ensure you have installed: npm install @lottiefiles/dotlottie-react
+import { DotLottieReact } from '@lottiefiles/dotlottie-react';
 
 const Navbar = () => {
   const { user, logout } = useAuth();
@@ -20,12 +22,43 @@ const Navbar = () => {
   
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  const handleLogout = () => {
-    logout();
-    navigate("/");
+  // 1. Triggered when user clicks "Logout"
+  const handleLogoutClick = () => {
     setIsMobileMenuOpen(false);
+    setIsProfileOpen(false);
+    setIsLoggingOut(true); // Start the overlay
   };
+
+  // 2. The actual logout logic (Seamless Transition)
+  const finalizeLogout = () => {
+    // A. Clear user session immediately
+    logout(); 
+    
+    // B. Navigate to the Public Home Page
+    navigate("/", { replace: true });
+
+    // C. DELAY hiding the overlay by 500ms.
+    // This keeps the white screen up while the router switches pages,
+    // preventing the "flash" of the dashboard.
+    setTimeout(() => {
+        setIsLoggingOut(false);
+    }, 500); 
+  };
+
+  // 3. CONTROL LOGIC: Show animation for 3 seconds, then trigger logout
+  useEffect(() => {
+    let logoutTimer;
+    if (isLoggingOut) {
+      // Since we are looping, we can't rely on 'onComplete'.
+      // We manually wait 3 seconds to let the animation play a few times.
+      logoutTimer = setTimeout(() => {
+        finalizeLogout();
+      }, 3000); 
+    }
+    return () => clearTimeout(logoutTimer);
+  }, [isLoggingOut]);
 
   const isActive = (path) => location.pathname === path;
 
@@ -69,6 +102,37 @@ const Navbar = () => {
     transition: "all 0.2s"
   });
 
+  // --- FULL SCREEN LOGOUT OVERLAY ---
+  if (isLoggingOut) {
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        background: '#ffffff',
+        zIndex: 99999,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        {/* Decreased Size: 300px -> 150px */}
+        <div style={{ width: '150px', height: '150px' }}>
+          <DotLottieReact
+            src="/logout.lottie"
+            autoplay
+            loop={true} // Now Loops continuously
+          />
+        </div>
+        <p style={{ marginTop: '20px', fontSize: '1.2rem', color: '#555', fontWeight: '600' }}>
+          Logging you out...
+        </p>
+      </div>
+    );
+  }
+
   // --- LOGGED IN NAV ---
   if (user) {
     return (
@@ -84,7 +148,6 @@ const Navbar = () => {
           {/* RIGHT: Desktop Menu */}
           <div className="desktop-menu" style={{ display: "none", alignItems: "center", gap: "10px" }}>
             
-            {/* Direct Navigation Links for Desktop */}
             <Link to="/patient-dashboard" style={linkStyle(isActive('/patient-dashboard'))}>
                 Dashboard
             </Link>
@@ -166,7 +229,7 @@ const Navbar = () => {
 
                             <div style={{ height: '1px', background: '#f0f0f0', margin: '6px 0' }}></div>
                             
-                            <button onClick={handleLogout} style={{ ...dropdownItemStyle, width: '100%', border: 'none', background: 'transparent', textAlign: 'left', color: '#d32f2f' }}>
+                            <button onClick={handleLogoutClick} style={{ ...dropdownItemStyle, width: '100%', border: 'none', background: 'transparent', textAlign: 'left', color: '#d32f2f' }}>
                                 <div style={{ ...iconBoxStyle, background: '#FFEBEE' }}><LogOut size={18} color="#d32f2f" /></div>
                                 <span style={{ fontWeight: '600' }}>Logout</span>
                             </button>
@@ -230,7 +293,7 @@ const Navbar = () => {
                         <FileText size={18} /> Reports
                      </Link>
                      
-                     <button onClick={handleLogout} style={{ ...mobileLinkStyle(false), color: '#d32f2f', border: 'none', background: 'none', textAlign: 'left', paddingLeft: 0 }}>
+                     <button onClick={handleLogoutClick} style={{ ...mobileLinkStyle(false), color: '#d32f2f', border: 'none', background: 'none', textAlign: 'left', paddingLeft: 0 }}>
                         <LogOut size={18} /> Sign Out
                      </button>
                 </div>
