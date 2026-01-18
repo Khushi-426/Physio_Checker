@@ -18,8 +18,8 @@ class CalibrationPhase(Enum):
     COMPLETE = "COMPLETE"
 
 class ArmStage(Enum):
-    UP = "UP"         # Fully contracted (e.g. Squat Bottom)
-    DOWN = "DOWN"     # Fully extended (e.g. Standing)
+    UP = "UP"         # Fully contracted (Target Position)
+    DOWN = "DOWN"     # Fully extended (Start Position)
     LOST = "LOST"     
     MOVING_UP = "MOVING_UP"   
     MOVING_DOWN = "MOVING_DOWN" 
@@ -41,7 +41,7 @@ class ExerciseConfig:
 
 mp_pose = mp.solutions.holistic.PoseLandmark
 
-# --- DEFINE CONFIGS INDIVIDUALLY FIRST ---
+# --- EXERCISE CONFIGURATIONS ---
 
 BICEP_CURL = ExerciseConfig(
     name="Bicep Curl",
@@ -103,13 +103,32 @@ STANDING_ROW = ExerciseConfig(
     ]
 )
 
-# --- MAP BOTH SINGULAR AND PLURAL NAMES ---
+# --- LATERAL RAISE CONFIGURATION ---
+# Using NOSE-SHOULDER-ELBOW.
+# Arms Down (Start): Angle ~ 180
+# Arms T-Pose (Target): Angle ~ 90
+# This matches the RepCounter logic (Target < Start)
+LATERAL_RAISE = ExerciseConfig(
+    name="Lateral Raise",
+    joint_to_track=ExerciseJoint.SHOULDER,
+    right_landmarks=[mp_pose.NOSE.value, mp_pose.RIGHT_SHOULDER.value, mp_pose.RIGHT_ELBOW.value],
+    left_landmarks=[mp_pose.NOSE.value, mp_pose.LEFT_SHOULDER.value, mp_pose.LEFT_ELBOW.value],
+    ai_features_landmarks=[
+        mp_pose.RIGHT_ELBOW.value, mp_pose.RIGHT_SHOULDER.value, mp_pose.RIGHT_HIP.value,
+        mp_pose.RIGHT_WRIST.value, 
+        mp_pose.LEFT_ELBOW.value, mp_pose.LEFT_SHOULDER.value, mp_pose.LEFT_HIP.value,
+        mp_pose.LEFT_WRIST.value,
+        mp_pose.NOSE.value
+    ]
+)
+
+# --- EXERCISE REGISTRY ---
 EXERCISE_PRESETS = {
     "Bicep Curl": BICEP_CURL,
     "Bicep Curls": BICEP_CURL,
     
     "Squat": SQUAT,
-    "Squats": SQUAT, # <--- THIS FIXES YOUR ISSUE
+    "Squats": SQUAT,
     
     "Knee Lift": KNEE_LIFT,
     "Knee Lifts": KNEE_LIFT,
@@ -117,7 +136,10 @@ EXERCISE_PRESETS = {
     "Shoulder Press": SHOULDER_PRESS,
     
     "Standing Row": STANDING_ROW,
-    "Standing Rows": STANDING_ROW
+    "Standing Rows": STANDING_ROW,
+
+    "Lateral Raise": LATERAL_RAISE,
+    "Lateral Raises": LATERAL_RAISE
 }
 
 # Settings

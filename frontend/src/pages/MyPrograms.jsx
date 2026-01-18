@@ -53,9 +53,10 @@ const PROGRAM_DATA = {
     { day: "Sat", completed: false, score: 0 },
     { day: "Sun", completed: false, score: 0 },
   ],
+  // --- UPDATED UPCOMING LIST ---
   upcoming: [
     { id: 101, title: "Quadriceps Sets", sets: "3x10", type: "Strength" },
-    { id: 102, title: "Heel Slides", sets: "3x15", type: "Mobility" },
+    { id: 102, title: "Lateral Raises", sets: "3x12", type: "Strength" }, // NEW CARD
     { id: 103, title: "Single Leg Stance", sets: "3x30s", type: "Balance" },
   ],
 };
