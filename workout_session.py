@@ -1,5 +1,6 @@
 """
 Main workout session manager - OPTIMIZED WITH FFI & STRICT TEMPORAL FILTER
+FIXED: Missing 'gesture_hold_duration' causing crash on V-Sign detection
 """
 import cv2
 import mediapipe as mp
@@ -113,6 +114,9 @@ class WorkoutSession:
             (mp_pose_lm.NOSE.value, mp_pose_lm.LEFT_SHOULDER.value),
         ]
         self.ghost_pose = GhostPose(instruction="Initializing...", connections=self.ghost_connections)
+        
+        # --- FIXED: Added gesture variables ---
+        self.gesture_hold_duration = 3.0  # Seconds to hold gesture state
         self.gesture_active_until = 0.0
         self.gesture_detected = False
         self._frames_in_active = 0
@@ -195,6 +199,7 @@ class WorkoutSession:
         
         raw_gesture_detected = self.pose_processor.detect_v_sign(results)
         if raw_gesture_detected:
+            # FIXED: Now 'gesture_hold_duration' is defined, so this won't crash
             self.gesture_active_until = current_time + self.gesture_hold_duration
             self.gesture_detected = True
         else:

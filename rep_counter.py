@@ -1,5 +1,5 @@
 """
-Rep counting logic - STABILIZED AND ACCURACY-FOCUSED
+Rep counting logic - STABILIZED WITH SMOOTHING & 6% PENALTY
 """
 from collections import deque
 from constants import ArmStage
@@ -36,6 +36,11 @@ class RepCounter:
         self.rep_min_angle = {'RIGHT': 180, 'LEFT': 180}
         self.rep_max_angle = {'RIGHT': 0, 'LEFT': 0}
         
+        # --- NEW: STABLE ACCURACY TRACKING ---
+        # Initialize at 100% so it starts high and adjusts down
+        self.smoothed_accuracy = {'RIGHT': 100.0, 'LEFT': 100.0} 
+        self.has_form_error = {'RIGHT': False, 'LEFT': False}     # Track error per rep
+        
         # ACCURACY & ERROR TRACKING
         self.rep_accuracies = {'RIGHT': [], 'LEFT': []}
         self.feedback_error_counts = {'RIGHT': 0, 'LEFT': 0}
@@ -56,32 +61,49 @@ class RepCounter:
         self.feedback_cooldown = {'RIGHT': 0, 'LEFT': 0}
 
     def _calculate_rep_accuracy(self, arm):
-        """Calculates 0-100% accuracy based on calibrated range of motion"""
+        """
+        Calculates SMOOTHED accuracy.
+        Logic: 
+        1. Calculate raw ROM score based on calibration.
+        2. Apply 6% Penalty if bad form was detected during the rep.
+        3. Apply Moving Average (80% old, 20% new) to prevent fluctuations.
+        """
+        # 1. Base ROM Calculation
         cal_ext = self.calibration.extended_thresholds[arm]
         cal_con = self.calibration.contracted_thresholds[arm]
         cal_range = abs(cal_ext - cal_con)
         
-        if cal_range == 0: return 100
+        # Avoid division by zero
+        if cal_range == 0: 
+            raw_accuracy = 100
+        else:
+            user_range = abs(self.rep_max_angle[arm] - self.rep_min_angle[arm])
+            deviation = abs(user_range - cal_range)
+            percent_error = (deviation / cal_range) * 100
+            raw_accuracy = max(0, 100 - percent_error)
+
+        # 2. Apply Penalty for Bad Form (RED state)
+        if self.has_form_error[arm]:
+            raw_accuracy -= 6  # Penalize 6% for bad form as requested
+            raw_accuracy = max(0, raw_accuracy)
+
+        # 3. Apply Smoothing (Weighted Average)
+        # 80% History, 20% New Rep -> Very stable, slow changes from 100%
+        prev_acc = self.smoothed_accuracy[arm]
+        new_smoothed = (prev_acc * 0.8) + (raw_accuracy * 0.2)
         
-        user_range = abs(self.rep_max_angle[arm] - self.rep_min_angle[arm])
+        self.smoothed_accuracy[arm] = new_smoothed
         
-        # Calculate deviation magnitude
-        deviation = abs(user_range - cal_range)
-        
-        # Calculate percentage error relative to expected range
-        percent_error = (deviation / cal_range) * 100
-        
-        # Accuracy is 100 minus the error
-        accuracy = max(0, 100 - percent_error)
-        
-        return int(accuracy)
+        return int(new_smoothed)
 
     def count_error_state_based(self, arm, feedback_color):
         """
-        Counts errors using STATE MACHINE (Rising Edge).
-        Increments ONLY when entering a RED state from a non-RED state.
+        Counts errors and flags the current rep as 'flawed'.
         """
         if feedback_color == "RED":
+            # Mark this rep as having an error for penalty calculation
+            self.has_form_error[arm] = True
+
             if not self.in_error_state[arm]:
                 # Rising edge: We just entered error state
                 self.feedback_error_counts[arm] += 1
@@ -164,6 +186,9 @@ class RepCounter:
             self.rep_start_time[arm] = current_time
             self.rep_min_angle[arm], self.rep_max_angle[arm] = 180, 0
             
+            # RESET FORM ERROR FLAG FOR NEW REP
+            self.has_form_error[arm] = False
+            
         # 2. DETECT REP COMPLETION (Moving from CONTRACTION -> EXTENSION)
         elif prev_stage == ArmStage.UP.value and new_stage in [ArmStage.MOVING_DOWN.value, ArmStage.DOWN.value]:
             
@@ -174,7 +199,7 @@ class RepCounter:
                     metrics.rep_count += 1
                     metrics.rep_time = rep_duration
                     
-                    # Calculate Genuine Accuracy for this Rep
+                    # Calculate Genuine Smoothed Accuracy for this Rep
                     calculated_accuracy = self._calculate_rep_accuracy(arm)
                     metrics.accuracy = calculated_accuracy
                     
@@ -189,7 +214,6 @@ class RepCounter:
     def _provide_user_centered_feedback(self, arm, angle, metrics, current_time):
         """
         Determines form feedback and counts errors.
-        CRITICAL FIX: Error counting happens BEFORE any Fatigue Override logic.
         """
         
         # 1. Determine "Natural" Feedback (based on mechanics)
@@ -207,27 +231,22 @@ class RepCounter:
             potential_color = "RED"
             self.color_lock_until[arm] = current_time + 2.0
         
-        # 2. COUNT ERRORS NOW (Before any overrides hide them)
-        # This fixes the "Zero Form Error" bug.
+        # 2. COUNT ERRORS NOW 
+        # This checks if potential_color is "RED" and flags has_form_error
         self.count_error_state_based(arm, potential_color)
 
-        # 3. Apply Feedback to UI (If not locked by Fatigue or Compliment)
-        
-        # Check 1: Is Fatigue Message Active? (Don't overwrite it, but we already counted the error above)
+        # 3. Apply Feedback to UI
         if metrics.feedback == "Fatigue Detected: Take a Rest":
             return
 
-        # Check 2: Is Compliment Active?
         if (current_time - self.last_rep_time[arm]) < self.color_hold_duration:
             metrics.feedback = self.current_compliment[arm]
             metrics.feedback_color = "GREEN"
             return
 
-        # Check 3: Is Color Locked?
         if current_time < self.color_lock_until[arm]:
             return
 
-        # Apply calculated feedback
         if potential_feedback != self.last_feedback[arm]:
             metrics.feedback = potential_feedback
             metrics.feedback_color = potential_color
@@ -245,3 +264,7 @@ class RepCounter:
         self.color_lock_until[arm] = 0
         self.ready_to_count[arm] = False
         self.in_error_state[arm] = False
+        
+        # Reset Smoothing to 100 on hard reset
+        self.smoothed_accuracy[arm] = 100.0
+        self.has_form_error[arm] = False
