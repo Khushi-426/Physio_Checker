@@ -15,7 +15,9 @@ import {
   Dumbbell,
   Clock,
   PlusCircle,
-  FileText
+  FileText,
+  MessageSquare,
+  Zap
 } from "lucide-react";
 import {
   LineChart,
@@ -91,7 +93,6 @@ const TherapistDashboard = () => {
             if (rawTs) {
                 const tsNum = Number(rawTs);
                 if (!isNaN(tsNum)) {
-                     // If year is 1970 (small number), assume it's seconds -> convert to ms
                      lastActiveDate = new Date(tsNum > 10000000000 ? tsNum : tsNum * 1000);
                 } else {
                      lastActiveDate = new Date(rawTs);
@@ -129,7 +130,8 @@ const TherapistDashboard = () => {
                 assignedSessions: assigned,
                 completionRate: p.completionRate || 0,
                 loginHistory: Array.isArray(p.loginHistory) ? p.loginHistory : [],
-                accuracyTrend: formattedTrend 
+                accuracyTrend: formattedTrend,
+                dailyCheckin: p.dailyCheckin // ✅ Check-in Data
             };
         });
 
@@ -254,6 +256,17 @@ const TherapistDashboard = () => {
       flexDirection: 'column',
       alignItems: 'center',
       marginBottom: '24px'
+    },
+    // ✅ NEW: Alert Card Style for Notification
+    alertCard: {
+      background: 'rgba(255, 255, 255, 0.8)',
+      backdropFilter: 'blur(15px)',
+      borderRadius: '30px',
+      padding: '20px',
+      borderLeft: '6px solid #f59e0b', // Orange accent
+      boxShadow: '0 10px 25px rgba(245, 158, 11, 0.15)',
+      marginBottom: '24px',
+      width: '100%'
     },
     circularAvatar: {
       width: '110px',
@@ -561,6 +574,44 @@ const TherapistDashboard = () => {
                         <strong style={{color: '#0f172a'}}>{graphData.length}</strong>
                     </div>
                 </div>
+
+                {/* ✅ NEW: DAILY CHECK-IN NOTIFICATION (Below Graph) */}
+                {selectedPatient.dailyCheckin ? (
+                    <div style={styles.alertCard}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent:'space-between', marginBottom:'10px' }}>
+                            <h4 style={{ margin: 0, color: '#d97706', display:'flex', alignItems:'center', gap:'8px' }}>
+                                <MessageSquare size={18}/> Daily Check-In
+                            </h4>
+                            <span style={{ fontSize:'0.75rem', color:'#92400e', fontWeight:600 }}>
+                                Today
+                            </span>
+                        </div>
+                        <div style={{ display:'flex', gap:'20px', alignItems:'center' }}>
+                            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', background:'rgba(255,255,255,0.6)', padding:'10px', borderRadius:'15px' }}>
+                                <span style={{ fontSize:'0.75rem', color:'#92400e', fontWeight:700, textTransform:'uppercase' }}>Fatigue</span>
+                                <div style={{ fontSize:'1.1rem', fontWeight:800, color:'#d97706', marginTop:'4px' }}>
+                                    {selectedPatient.dailyCheckin.fatigue}
+                                </div>
+                            </div>
+                            <div style={{ flex:1 }}>
+                                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
+                                    <span style={{ fontSize:'0.75rem', color:'#92400e', fontWeight:700 }}>PAIN</span>
+                                    <span style={{ fontSize:'0.8rem', fontWeight:800, color:'#ef4444' }}>{selectedPatient.dailyCheckin.pain}/10</span>
+                                </div>
+                                <div style={{ height:'8px', width:'100%', background:'#fee2e2', borderRadius:'10px', overflow:'hidden' }}>
+                                    <div style={{ width: `${selectedPatient.dailyCheckin.pain * 10}%`, height:'100%', background: 'linear-gradient(90deg, #fca5a5, #ef4444)' }}></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    // Empty State for notification
+                     <div style={{ ...styles.alertCard, borderLeft: '6px solid #cbd5e1', background:'rgba(255,255,255,0.5)', opacity:0.8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap:'10px', color:'#64748b' }}>
+                            <Zap size={18}/> <span style={{fontSize:'0.9rem'}}>No check-in received today.</span>
+                        </div>
+                     </div>
+                )}
 
                 <button 
                     className="btn-full-record" 
