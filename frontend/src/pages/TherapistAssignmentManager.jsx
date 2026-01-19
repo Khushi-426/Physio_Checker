@@ -9,6 +9,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 
 // --- CONFIGURATION ---
+// ✅ FIX: Pointing to Flask Port 5001 (Since your logs show it's hitting Flask)
 const API_BASE = 'http://localhost:5001/api';
 
 // --- EXERCISE DATABASE ---
@@ -175,6 +176,7 @@ const TherapistAssignmentManager = () => {
       } catch (err) {
         console.error("Error fetching patients:", err);
         setLoading(false);
+        showNotification("Failed to load patient directory", "error");
       }
     };
     fetchPatients();
@@ -203,15 +205,16 @@ const TherapistAssignmentManager = () => {
   };
 
   const handleAssign = async (exercise) => {
+    if (!selectedPatient) return;
+
     const config = prescriptions[exercise.id] || { sets: 3, reps: 10, duration: 14 };
     const newAssignment = { ...exercise, ...config, timestamp: Date.now() };
     setAssignedExercises(prev => [...prev, newAssignment]);
     
     try {
-      // Corrected Route: /api/protocols/assign
-      // Corrected Payload: Sending patientId instead of email
+      // ✅ Corrected Endpoint Call matching new Flask Route
       await axios.post(`${API_BASE}/protocols/assign`, { 
-        patientId: selectedPatient._id, // Ensure your patient object has _id
+        patientId: selectedPatient.id || selectedPatient._id, // Handle both ID formats
         exerciseName: exercise.name, 
         sets: parseInt(config.sets),
         reps: parseInt(config.reps),
@@ -239,8 +242,8 @@ const TherapistAssignmentManager = () => {
     let result = [...patients];
     if (searchQuery) {
       return result.filter(p => 
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        p.email.toLowerCase().includes(searchQuery.toLowerCase())
+        (p.name && p.name.toLowerCase().includes(searchQuery.toLowerCase())) || 
+        (p.email && p.email.toLowerCase().includes(searchQuery.toLowerCase()))
       );
     }
     return result.sort((a, b) => new Date(b.date_joined) - new Date(a.date_joined)).slice(0, 6);
@@ -289,11 +292,11 @@ const TherapistAssignmentManager = () => {
             <div style={styles.gridList}>
               {visiblePatients.map((p, index) => (
                 <motion.div 
-                  key={p.email} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }}
+                  key={p.email || index} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }}
                   onClick={() => setSelectedPatient(p)} style={styles.patientCard} whileHover={{ scale: 1.02, boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)' }}
                 >
                   <div style={styles.cardHeader}>
-                      <div style={styles.avatarRow}>{p.name.charAt(0)}</div>
+                      <div style={styles.avatarRow}>{p.name ? p.name.charAt(0) : '?'}</div>
                       <span style={{ ...styles.statusDot, backgroundColor: p.status === 'High Risk' ? '#ef4444' : '#22c55e' }} />
                   </div>
                   <h3 style={styles.cardName}>{p.name}</h3>

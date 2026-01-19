@@ -8,9 +8,11 @@ const Notification = require('../models/Notification');
 
 // POST /api/protocols/assign
 router.post('/assign', auth, async (req, res) => {
-  const { patientId, sets, reps, difficulty, exerciseName } = req.body;
+  const { patientId, sets, reps, difficulty, exerciseName, duration } = req.body;
 
+  // Added basic validation logging
   if (!patientId || !sets || !reps || !difficulty || !exerciseName) {
+    console.log("❌ Assignment Failed: Missing Fields", req.body);
     return res
       .status(400)
       .json({ message: 'patientId, sets, reps, difficulty, and exerciseName are required.' });
@@ -18,15 +20,14 @@ router.post('/assign', auth, async (req, res) => {
 
   try {
     const patient = await User.findById(patientId);
-    if (!patient || patient.role !== 'PATIENT') {
+    
+    // FIX: Case-insensitive role check (Accepts 'patient' or 'PATIENT')
+    if (!patient || (patient.role && patient.role.toUpperCase() !== 'PATIENT')) {
+      console.log(`❌ Assignment Failed: Invalid Patient Role. Found: ${patient ? patient.role : 'No User'}`);
       return res.status(400).json({ message: 'Invalid patient.' });
     }
 
-    // deactivate previous active protocol for this patient & therapist
-    // Note: If you want to allow multiple different exercises assigned simultaneously, 
-    // you might want to only deactivate if the exerciseName matches. 
-    // For now, keeping your original logic which seems to deactivate ANY previous protocol.
-    // If you want to support multiple active exercises, consider removing this block or making it specific to exerciseName.
+    // Deactivate previous active protocol for this specific exercise
     await Protocol.updateMany(
       { patient: patientId, therapist: req.user.id, isActive: true, exerciseName: exerciseName },
       { isActive: false }
@@ -37,24 +38,26 @@ router.post('/assign', auth, async (req, res) => {
       patient: patientId,
       sets,
       reps,
-      difficulty,
-      exerciseName: exerciseName // Dynamically set from request
+      difficulty, // Now accepts "Intermediate" etc.
+      exerciseName: exerciseName,
+      // Optional: If you want to store duration (days) in the DB, ensure schema has it or store in metadata
     });
 
     await protocol.save();
+    console.log(`✅ Protocol Assigned: ${exerciseName} to ${patient.name}`);
 
     // Create notification
     await Notification.create({
       therapist: req.user.id,
       patient: patientId,
       type: 'PROTOCOL_ASSIGNED',
-      message: `New protocol assigned: ${exerciseName} - ${protocol.sets}x${protocol.reps} (${protocol.difficulty}).`,
+      message: `New protocol assigned: ${exerciseName} - ${sets}x${reps} (${difficulty}).`,
       metadata: {
         protocolId: protocol._id,
         exerciseName: exerciseName,
-        sets: protocol.sets,
-        reps: protocol.reps,
-        difficulty: protocol.difficulty
+        sets: sets,
+        reps: reps,
+        difficulty: difficulty
       }
     });
 
@@ -62,7 +65,7 @@ router.post('/assign', auth, async (req, res) => {
       .status(201)
       .json({ message: 'Protocol assigned successfully.', protocol });
   } catch (err) {
-    console.error('Assign protocol error:', err);
+    console.error('❌ Assign protocol error:', err);
     return res
       .status(500)
       .json({ message: 'Server error during protocol assignment.', error: err.message });
@@ -81,8 +84,9 @@ router.get('/patient/:patientId', auth, async (req, res) => {
       isActive: true
     });
 
+    // Valid empty state response (Return empty array instead of 404 for cleaner frontend handling)
     if (!protocols || protocols.length === 0) {
-      return res.status(404).json({ message: 'No active protocols for this patient.' });
+      return res.json([]); 
     }
 
     return res.json(protocols);

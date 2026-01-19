@@ -7,10 +7,9 @@ const protocolRoutes = require('./routes/protocols');
 const therapistRoutes = require('./routes/therapist');
 const sessionRoutes = require('./routes/sessions');
 const notificationRoutes = require('./routes/notifications');
+const cors = require('cors'); // ✅ Added CORS
 
-// We are skipping therapistRoutes and patientRoutes for now to focus on the fix.
-
-// 1. Load environment variables (CRUCIAL: Must be the very first line after requires)
+// 1. Load environment variables
 require('dotenv').config(); 
 
 const app = express();
@@ -20,7 +19,11 @@ const PORT = process.env.PORT || 5000;
 connectDB();
 
 // 3. Middleware
-app.use(express.json()); // Allows the server to accept JSON data in the request body
+app.use(cors({
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173"], // Allow Frontend
+    credentials: true
+}));
+app.use(express.json()); 
 
 // 4. Define Main Routes
 app.use('/api/auth', authRoutes); 
@@ -29,7 +32,7 @@ app.use('/api/therapist', therapistRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/notifications', notificationRoutes);
 
-// Basic Test Route (Optional)
+// Basic Test Route
 app.get('/', (req, res) => {
     res.send('Rehabilitation Backend API is running.');
 });

@@ -24,6 +24,7 @@ from pymongo import MongoClient
 from flask_mail import Mail, Message
 from flask_socketio import SocketIO, emit
 from bson.objectid import ObjectId
+from bson.errors import InvalidId # ✅ Import InvalidId to handle the error gracefully
 
 # --- IMPORT CUSTOM AI MODULES ---
 from workout_session import WorkoutSession
@@ -426,8 +427,100 @@ def update_user_profile():
 
 # --- EXERCISE & PROTOCOL ROUTES ---
 
+@app.route("/api/protocols/assign", methods=["POST", "OPTIONS"])
+def assign_protocol_new():
+    """
+    Dedicated route for the new React Therapist Assignment Manager.
+    Accepts patientId which can be either a MongoDB ObjectID OR an Email string.
+    """
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
+    if protocols_collection is None or users_collection is None: 
+        return jsonify({"error": "Database unavailable"}), 503
+        
+    data = request.get_json(silent=True) or {}
+    patient_identifier = data.get("patientId")
+    exercise_name = data.get("exerciseName")
+    
+    if not patient_identifier or not exercise_name: 
+        return jsonify({"error": "Missing patientId or exerciseName"}), 400
+        
+    try:
+        # ✅ FIX: Robust User Lookup (Handles ID or Email)
+        patient = None
+        
+        # 1. Try treating it as an ObjectID
+        try:
+            patient = users_collection.find_one({"_id": ObjectId(patient_identifier)})
+        except (InvalidId, TypeError):
+            # 2. If invalid ID, treat it as an email
+            print(f"⚠️ '{patient_identifier}' is not a valid ObjectId. Searching by email...")
+            patient = users_collection.find_one({"email": patient_identifier})
+
+        if not patient: 
+            return jsonify({"error": f"Patient not found for identifier: {patient_identifier}"}), 404
+        
+        sets = data.get("sets", 3)
+        reps = data.get("reps", 10)
+        difficulty = data.get("difficulty", "Medium")
+        duration = data.get("duration", 14) 
+        
+        # In a real app, we would get the therapist ID from the token (req.user)
+        therapist = users_collection.find_one({"role": "therapist"})
+        therapist_id = therapist["_id"] if therapist else patient["_id"] 
+        
+        # Deactivate previous protocol for this specific exercise
+        protocols_collection.update_many(
+            {"patient": patient["_id"], "exerciseName": exercise_name, "isActive": True},
+            {"$set": {"isActive": False}}
+        )
+
+        protocol_doc = {
+            "therapist": therapist_id,
+            "patient": patient["_id"],
+            "exerciseName": exercise_name,
+            "sets": sets,
+            "reps": reps,
+            "difficulty": difficulty,
+            "duration": duration,
+            "isActive": True,
+            "createdAt": datetime.now(),
+            "updatedAt": datetime.now()
+        }
+        
+        result = protocols_collection.insert_one(protocol_doc)
+        
+        # Create Notification
+        if notifications_collection is not None:
+            notifications_collection.insert_one({
+                "therapist": therapist_id,
+                "patient": patient["_id"],
+                "type": "PROTOCOL_ASSIGNED",
+                "message": f"Assigned {exercise_name}: {sets}x{reps} ({difficulty})",
+                "timestamp": time.time(),
+                "metadata": {
+                    "protocolId": result.inserted_id,
+                    "exerciseName": exercise_name
+                }
+            })
+
+        print(f"✅ Protocol assigned: {exercise_name} to {patient.get('name')}")
+
+        return jsonify({
+            "status": "assigned", 
+            "exercise": exercise_name,
+            "protocolId": str(result.inserted_id),
+            "details": {"sets": sets, "reps": reps, "difficulty": difficulty}
+        }), 201
+
+    except Exception as e:
+        logger.error(f"Assignment Error: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
+
 @app.route("/api/assign", methods=["POST"])
-def assign_exercise():
+def assign_exercise_legacy():
+    # LEGACY ROUTE SUPPORT (For older components)
     if protocols_collection is None or users_collection is None: 
         return jsonify({"error": "Database unavailable"}), 503
         
@@ -559,12 +652,18 @@ def get_session_history():
 
 @app.route("/api/therapist/patients", methods=["GET"])
 def therapist_patients():
+    """
+    Returns list of patients with summary stats.
+    Includes both PATIENT (uppercase) and patient (lowercase) roles.
+    """
     if users_collection is None: return jsonify({"patients": []}), 200
     
-    patients = list(users_collection.find(
-        {"role": "patient"}, 
-        {"_id": 0, "name": 1, "email": 1, "created_at": 1, "age": 1, "weight": 1, "bloodGroup": 1}
-    ))
+    # Updated Query: Case-insensitive role check
+    patients_cursor = users_collection.find({
+        "role": {"$in": ["patient", "PATIENT"]}
+    }, {"password": 0, "otp": 0})
+    
+    patients = list(patients_cursor)
     
     enriched = []
     
@@ -612,7 +711,8 @@ def therapist_patients():
             elif last_acc < 80: status = "Alert"
             
         enriched.append({
-            "id": str(email),
+            "id": str(p["_id"]), # Ensure ID is string for frontend
+            "_id": str(p["_id"]),
             "name": p.get("name", "Unknown"),
             "email": email,
             "age": p.get("age", "--"),
