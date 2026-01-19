@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Share2, Download, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Share2, Download, AlertTriangle, Camera } from "lucide-react";
 import {
   BarChart,
   Bar,
@@ -111,7 +111,7 @@ const Report = () => {
 
       <div
         style={{
-          maxWidth: "900px",
+          maxWidth: "1000px",
           margin: "0 auto",
           background: "#fff",
           borderRadius: "30px",
@@ -191,7 +191,7 @@ const Report = () => {
         </div>
 
         {/* Charts & Details */}
-        <div style={{ display: "flex", gap: "40px", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginBottom: "40px" }}>
           {/* Chart */}
           <div style={{ flex: 1, minWidth: "300px", height: "300px" }}>
             <h3 style={{ marginBottom: "20px", color: "#444" }}>
@@ -241,6 +241,40 @@ const Report = () => {
             </div>
           </div>
         </div>
+
+        {/* NEW: Error Visual Evidence Section */}
+        {data?.error_snapshots && data.error_snapshots.length > 0 && (
+          <div style={{ marginBottom: "40px" }}>
+             <h3 style={{ marginBottom: "20px", color: "#C62828", display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Camera size={24} /> Visual Error Log
+             </h3>
+             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
+                {data.error_snapshots.map((snap, index) => (
+                  <div key={index} style={{ 
+                      borderRadius: "16px", 
+                      overflow: "hidden", 
+                      border: "1px solid #FFCDD2",
+                      boxShadow: "0 4px 12px rgba(198, 40, 40, 0.1)" 
+                  }}>
+                    <img 
+                      src={`data:image/jpeg;base64,${snap.image}`} 
+                      alt="Error Snapshot" 
+                      style={{ width: "100%", height: "180px", objectFit: "cover" }} 
+                    />
+                    <div style={{ padding: "16px", background: "#FFEBEE" }}>
+                       <div style={{ fontWeight: "700", color: "#C62828", marginBottom: "4px" }}>
+                         {snap.error.toUpperCase()}
+                       </div>
+                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#B71C1C" }}>
+                          <span>⏱️ {snap.time}</span>
+                          <span>Rep: {snap.rep}</span>
+                       </div>
+                    </div>
+                  </div>
+                ))}
+             </div>
+          </div>
+        )}
 
         {/* Actions */}
         <div
